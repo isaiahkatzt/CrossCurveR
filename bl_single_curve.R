@@ -1,6 +1,8 @@
 source("packages.R")
 
-#### baseline single-curve dns estimation  
+#############################################
+#      Baseline Single Curve Estimation     #
+#############################################
 
 l2_loss_lambda <- function(lambda_grid, daily_yield, mats) {
   n <- length(lambda_grid)
