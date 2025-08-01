@@ -1,0 +1,74 @@
+---
+title: "function_testing"
+author: "Isaiah Katz"
+date: "2025-07-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(microbenchmark)
+
+source("curve_reformat.R")
+```
+
+```{r}
+usa <- read.csv("reconstructed-data/usa-bs.csv")
+gbr <- read.csv("reconstructed-data/gbr-bs.csv")
+jpn <- read.csv("reconstructed-data/jpn-bs.csv")
+#cad <- read.csv("reconstructed-data/cad-bs.csv")
+
+yields <- list(usa, gbr, jpn, cad)
+curves <- c("usa", "gbr", "jpn")# , "cad")
+mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360) 
+lambdas <- seq(0.01, 0.1, by = 0.001)
+```
+
+```{r}
+## testing 
+
+source("ns_core.R")
+source("bl_single_curve.R")
+source("bl_feature_extract.R")
+
+lambda_select_usa <- lambda_grid_search(lambdas, usa[1:100,], mats)
+lambda_select_gbr <- lambda_grid_search(lambdas, gbr[1:100,], mats)
+lambda_select_jpn <- lambda_grid_search(lambdas, gbr[1:100,], mats)
+
+#microbenchmark(
+#  func1 = lambda_grid_search(lambdas, usa[1:100,], mats), 
+#  func2 = lambda_grid_search2(lambdas, usa[1:100,], mats), 
+#  times = 100L  # Number of repetitions
+#)
+
+usa_curve <- bl_single_curve(lambda_select_usa, usa[1:100, ], c(4, 8), mats)
+gbr_curve <- bl_single_curve(lambda_select_gbr, gbr[1:100, ], c(4, 8), mats)
+jpn_curve <- bl_single_curve(lambda_select_jpn, jpn[1:100, ], c(4, 8), mats)
+
+tsc_list <- transpose(setNames(list(usa_curve, gbr_curve, jpn_curve), curves))
+test_ccVAR <- blmc_VAR(tsc_list, "usa", curves) 
+```
+
+```{r}
+blmc_VAR2 <- function(blsc_list, reference, curves) {
+  marginals <- setdiff(curves, reference) 
+  reference_beta <- blsc_list$betas[[reference]]
+  cross_curve_beta <- setNames(vector("list", length(marginals)), marginals)
+  
+  for (m in marginals) {
+    m_beta <- blsc_list$betas[[m]]
+    cc_beta <- cbind(reference_beta$NSbetas, m_beta$NSbetas)
+    colnames(cc_beta) <- c(
+      paste0(reference, c(".L", ".S", ".C")),
+      paste0(m, c(".L", ".S", ".C"))
+    )
+    cross_curve_beta[[m]] <- cc_beta
+  }
+  
+  return(cross_curve_beta)
+}
+
+blmc_VAR2(tsc_list, "usa", curves)
+```
+
