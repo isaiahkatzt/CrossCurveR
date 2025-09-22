@@ -1,4 +1,5 @@
 source("packages.R")
+source("curve_reformat.R")
 
 #############################################
 #            Feature Extraction             #
@@ -54,6 +55,7 @@ blmc_cspread <- function(cc_betas, Gmatrix, normalize = TRUE) {
 }
 
 blmc_Fselect <- function(Fmatrix) {
+  reversion_norm <- sqrt(colSums(Fmatrix^2))
   
 }
 
@@ -79,10 +81,64 @@ blcc_cointegration <- function(blsc_list, curves, reference, estim = "ML", type 
 }
 
 blcc_build_Xt <- function(cc_cspread, cc_ecm, trunc = FALSE) {
+  ## construct full Xt covariate matrix 
   if (!trunc) {
     Xt <- do.call(cbind, cc_cspread) 
   } else {
-    ## REVERSION RATE CONDITION 
+  ## placeholder condition for testing  
+    Xt <- do.call(cbind, lapply(cc_cspread, function(x) x[, 1]))
   }
+  return(Xt) 
+}
+
+blcc_build_Wj <- function(curve_nsfit, mats){
+  ## construct tenor-specific Wj list 
+  wc_list <- lapply(curve_nsfit, `[[`, 1) 
+  mat_names <- paste0("X", sapply(mats, numeric_to_matname))
+  wj_full <- setNames(lapply(seq_along(mats), function(i) {
+    do.call(cbind, lapply(wc_list, function(x) x[, i])) 
+  }), mat_names)
+  
+  return(Wj = wj_full)
+}
+
+blcc_fe <- function(Xt, Wt, mats, trunc = TRUE, covreg=zero_mean_covreg,
+                    init = "adaptive", max_iter = 1000, tol = 1e-10, S0 = NULL, B = NULL, verb = FALSE, term = FALSE) {
+  ## baseline cross-curve feature extraction
+  BS0_list <- lapply(Wt, function(Wj) {
+    covreg(W=Wj, X=Xt, init = init, max_iter = max_iter, tol = tol, S0 = S0, B = B, 
+           verb = verb, term = term)
+  })
+  return(BS0_list) 
+}
+
+sigma_jt_optim <- function(BS0j, x) {
+  ## compute single-day sigma_{jt}   
+  B <- BS0j$B
+  S0 <- BS0j$S0
+  Bx <- B %*% x
+  Sigma <- S0 + tcrossprod(Bx)  
+  return(Sigma)
+}
+
+jSigma_optim <- function(BS0j, X) {
+  # compute full period sigma_{jt}
+  N <- nrow(X)
+  day_list <- vector("list", N)
+  
+  jSigma <- lapply(seq_len(N), function(i) {
+    sigma_jt_optim(BS0j = BS0j, x = X[i, ])
+  })
+  return(jSigma)
+}
+
+tSigma_optim <- function(BS0, X) {
+  # compute full period, all sigma_{jt} 
+  N <- nrow(X) 
+  sigma_j_full <- lapply(BS0, function(j) jSigma_optim(j, X))
+  sigma_t_full <- lapply(seq_len(N), function(t) {
+    bdiag(lapply(sigma_j_full, function(j) j[[t]]))
+  })
+  return(list(tSigma = sigma_t_full, jSigma = sigma_j_full))
 }
 

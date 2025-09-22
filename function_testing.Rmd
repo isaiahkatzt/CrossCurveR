@@ -32,10 +32,10 @@ source("ns_core.R")
 source("bl_single_curve.R")
 source("bl_feature_extract.R")
 
-lambda_select_usa <- lambda_grid_search(lambdas, usa[1:100,], mats)
-lambda_select_gbr <- lambda_grid_search(lambdas, gbr[1:100,], mats)
-lambda_select_jpn <- lambda_grid_search(lambdas, jpn[1:100,], mats)
-lambda_select_cad <- lambda_grid_search(lambdas, cad[1:100,], mats)
+lambda_select_usa <- lambda_grid_search(lambdas, usa[1:250,], mats)
+lambda_select_gbr <- lambda_grid_search(lambdas, gbr[1:250,], mats)
+lambda_select_jpn <- lambda_grid_search(lambdas, jpn[1:250,], mats)
+lambda_select_cad <- lambda_grid_search(lambdas, cad[1:250,], mats)
 
 #microbenchmark(
 #  func1 = lambda_grid_search(lambdas, usa[1:100,], mats), 
@@ -43,26 +43,21 @@ lambda_select_cad <- lambda_grid_search(lambdas, cad[1:100,], mats)
 #  times = 100L  # Number of repetitions
 #)
 
-usa_curve <- bl_single_curve(lambda_select_usa, usa[1:500, ], c(4, 8), mats)
-gbr_curve <- bl_single_curve(lambda_select_gbr, gbr[1:500, ], c(4, 8), mats)
-jpn_curve <- bl_single_curve(lambda_select_jpn, jpn[1:500, ], c(4, 8), mats)
-cad_curve <- bl_single_curve(lambda_select_cad, cad[1:500, ], c(4, 8), mats) 
+usa_curve <- bl_single_curve(lambda_select_usa, usa[1:250, ], c(4, 8), mats)
+gbr_curve <- bl_single_curve(lambda_select_gbr, gbr[1:250, ], c(4, 8), mats)
+jpn_curve <- bl_single_curve(lambda_select_jpn, jpn[1:250, ], c(4, 8), mats)
+cad_curve <- bl_single_curve(lambda_select_cad, cad[1:250, ], c(4, 8), mats) 
 
 tsc_list <- transpose(setNames(list(usa_curve, gbr_curve, jpn_curve, cad_curve), curves))
 test_ccVARs <- blcc_cointegration(tsc_list, curves = curves, reference = "usa")
+
+Xt = blcc_build_Xt(test_ccVARs$cc_cspread,)
+W = blcc_build_Wj(tsc_list$nsfit, mats)
 ```
 
 ```{r}
 source("cr_core_estim.R")
-
-set.seed(49)
-crt <- zero_mean_covreg(tsc_list$nsfit$gbr$W, test_cspread)
-
-zero_mean_covreg(tsc_list$nsfit$gbr$W, test_cspread)
-
-tsc_list$nsfit$gbr$W
-
-
-test_ccVARs$cc_ecm$gbr$Fmatrix
+test_BS0 <- blcc_fe(Xt=Xt, Wt=W, mats=mats, init="adaptive")
+ts <- tSigma_optim(test_BS0, Xt)
 ```
 

@@ -28,7 +28,7 @@ zero_mean_covreg <- function(W, X, init = "adaptive", max_iter = 1000, tol = 1e-
   
   b_est <- vector("list", length = max_iter) 
   s_est <- vector("list", length = max_iter)
-
+  
   iS0 <- solve(S0) 
   iter <- 0 
   
@@ -36,7 +36,7 @@ zero_mean_covreg <- function(W, X, init = "adaptive", max_iter = 1000, tol = 1e-
   
   while(iter < max_iter) {
     iter <- iter + 1 
-    
+
     ## E STEP 
     XtB <- X %*% t(B) 
     vz <- 1/(1 + apply((XtB %*% iS0) * XtB, 1, sum))

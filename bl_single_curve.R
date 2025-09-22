@@ -69,7 +69,7 @@ bl_bdiag_H <- function(Wt, rate_cutoffs, mats) {
   sm_idx    <- r1:(r1 + 1)
   ml_idx    <- r2:(r2 + 1)
   
-  # Extract views
+  # extract rate-specific views
   short_rates <- Wt[, short_idx, drop = FALSE]
   med_rates   <- Wt[, med_idx, drop = FALSE]
   long_rates  <- Wt[, long_idx, drop = FALSE]
@@ -86,7 +86,7 @@ bl_bdiag_H <- function(Wt, rate_cutoffs, mats) {
   sigma_SM <- cov(coupling_SM)
   sigma_ML <- cov(coupling_ML)
   
-  # insert symmetric coupling terms 
+  # insert coupling terms 
   H_matrix[sm_idx[1], sm_idx[2]] <- sigma_SM[1, 2]
   H_matrix[sm_idx[2], sm_idx[1]] <- sigma_SM[1, 2]
   H_matrix[ml_idx[1], ml_idx[2]] <- sigma_ML[1, 2]

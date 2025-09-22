@@ -20,8 +20,7 @@ packages <- c(
   "lubridate", 
   "tseries", 
   "YieldCurve", 
-  "dgof", 
-  "matrixStats"
+  "dgof"
 )
 
 install_and_load <- function(pkg) {
