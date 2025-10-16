@@ -19,7 +19,7 @@ l2_loss_lambda <- function(lambda_grid, daily_yield, mats) {
 
 lambda_grid_search <- function(lambda_grid, yields, mats) {  
   ## fast search lambda grid 
-  yields <- as.matrix(yields[, -1, drop = FALSE])  # Ensure matrix structure
+  yields <- as.matrix(yields[, -1, drop = FALSE])  
   N <- nrow(yields)
   n <- length(lambda_grid)
   

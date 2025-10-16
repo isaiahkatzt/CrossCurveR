@@ -54,14 +54,20 @@ test_ccVARs <- blcc_cointegration(tsc_list, curves = curves, reference = "usa")
 Xt = blcc_build_Xt(test_ccVARs$cc_cspread,)
 W = blcc_build_Wj(tsc_list$nsfit, mats)
 H <- bdiag(usa_curve$H, gbr_curve$H, jpn_curve$H, cad_curve$H)
+Y <- vecY(yields)
 
+Y$time
 ```
 
 ```{r}
 source("cr_core_estim.R")
+source("matrix_helpers.R")
+
 test_BS0 <- blcc_fe(Xt=Xt, Wt=W, mats=mats, init="adaptive")
 ts <- tSigma_optim(test_BS0, Xt)
 
+sqrt_sigma_t <- lapply(ts$tSigma, symmPSD_sqrt)
+sqrt_inv_sigma_t <- lapply(sqrt_sigma_t, solve)
 ```
 
 
@@ -69,7 +75,7 @@ ts <- tSigma_optim(test_BS0, Xt)
 source("bl_normalize.R")
 ptest <- bln_build_P(mats, curves)
 
-source("matrix_helpers.R")
+bln_YB(ptest, )
 
 ```
 
