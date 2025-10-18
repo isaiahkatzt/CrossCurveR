@@ -19,10 +19,15 @@ gbr <- read.csv("reconstructed-data/gbr-bs.csv")
 jpn <- read.csv("reconstructed-data/jpn-bs.csv")
 cad <- read.csv("reconstructed-data/cad-bs.csv")
 
-yields <- list(usa, gbr, jpn, cad)
+yields <- list(usa[1:250, ], gbr[1:250, ], jpn[1:250, ], cad[1:250, ])
 curves <- c("usa", "gbr", "jpn", "cad")
 mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360) 
-lambdas <- seq(0.01, 0.1, by = 0.001)
+mat_str = sapply(mats, numeric_to_matname)
+
+lambdas <- seq(0.01, 0.1, by = 0.005)
+
+mds <- as.vector(t(outer(curves, mat_str, paste, sep='.')))
+
 ```
 
 ```{r}
@@ -43,20 +48,18 @@ lambda_select_cad <- lambda_grid_search(lambdas, cad[1:250,], mats)
 #  times = 100L  # Number of repetitions
 #)
 
-usa_curve <- bl_single_curve(lambda_select_usa, usa[1:250, ], c(4, 8), mats)
-gbr_curve <- bl_single_curve(lambda_select_gbr, gbr[1:250, ], c(4, 8), mats)
-jpn_curve <- bl_single_curve(lambda_select_jpn, jpn[1:250, ], c(4, 8), mats)
-cad_curve <- bl_single_curve(lambda_select_cad, cad[1:250, ], c(4, 8), mats) 
+usa_curve <- bl_single_curve(lambda_select_usa, usa[1:250, ], c(4, 8), mats) # done 
+gbr_curve <- bl_single_curve(lambda_select_gbr, gbr[1:250, ], c(4, 8), mats) # done 
+jpn_curve <- bl_single_curve(lambda_select_jpn, jpn[1:250, ], c(4, 8), mats) # done 
+cad_curve <- bl_single_curve(lambda_select_cad, cad[1:250, ], c(4, 8), mats) # done 
 
-tsc_list <- transpose(setNames(list(usa_curve, gbr_curve, jpn_curve, cad_curve), curves))
-test_ccVARs <- blcc_cointegration(tsc_list, curves = curves, reference = "usa")
+tsc_list <- transpose(setNames(list(usa_curve, gbr_curve, jpn_curve, cad_curve), curves)) # done 
+test_ccVARs <- blcc_cointegration(tsc_list, curves = curves, reference = "usa") # done 
 
 Xt = blcc_build_Xt(test_ccVARs$cc_cspread,)
-W = blcc_build_Wj(tsc_list$nsfit, mats)
-H <- bdiag(usa_curve$H, gbr_curve$H, jpn_curve$H, cad_curve$H)
-Y <- vecY(yields)
-
-Y$time
+W = blcc_build_Wj(tsc_list$nsfit, mats) # done 
+H <- bdiag(usa_curve$H, gbr_curve$H, jpn_curve$H, cad_curve$H) # done 
+Y <- vecY(yields, curves, mats) # done 
 ```
 
 ```{r}
@@ -68,14 +71,61 @@ ts <- tSigma_optim(test_BS0, Xt)
 
 sqrt_sigma_t <- lapply(ts$tSigma, symmPSD_sqrt)
 sqrt_inv_sigma_t <- lapply(sqrt_sigma_t, solve)
+
 ```
 
 
 ```{r}
 source("bl_normalize.R")
-ptest <- bln_build_P(mats, curves)
+P <- bln_build_P(mats, curves)
+pY <- PY_full(Y$tY, P)
 
-bln_YB(ptest, )
+yb <- bln_YB(pY$py[1:250,], sqrt_inv_sigma_t)
+phib <-  bln_phi_BT(phihat, P, sqrt_inv_sigma_t)
 
+colnames(pY$py)
+```
+
+```{r}
+bl_endogenous_estim <- function(yields, lambdas, cutoffs, reference, 
+                                ECM_estim="ML", ECM_type="eigen", ECM_alpha=0.1, X_normalize=TRUE, X_trunc=FALSE,
+                                CR_algo=zero_mean_covreg, CR_init="adaptive", 
+                                CR_maxiter=1000, CR_tol=1e-8, CR_Binit=NULL, CR_S0init=NULL, CR_verb=FALSE, CR_term=TRUE, 
+                                curves, mats) {
+  
+  ## build vector yield embedding and permutation matrix  
+  Y <- vecY(yields, curves, mats)   
+  P <- bln_build_P(curves, mats)  
+  
+  ## grid search lambda construction (to do: KF estimation) 
+  curve_lambdas <- vapply(yields, function(x) { 
+    lambda_grid_search(lambdas, x, mats)
+    }, numeric(1) 
+  )
+  
+  bl_yields <- transpose(setNames(lapply(seq_along(yields), function(x) {
+    bl_single_curve(curve_lambdas[x], yields[[x]], cutoffs, mats)
+    }
+  ), curves)) 
+  
+  W <- blcc_build_Wj(bl_yields$nsfit, mats) 
+  H <- bdiag(bl_yields$H) 
+  
+  cc_ci_features <- blcc_cointegration(blsc_list=bl_yields, curves=curves, reference=reference, 
+                                       estim=ECM_estim, type=ECM_type, alpha=ECM_alpha, normalize=X_normalize)
+  
+  Xt <- blcc_build_Xt(cc_ci_features$cc_cspread, cc_ci_features$cc_ecm, trunc=X_trunc) 
+  
+  cc_BS0_feature <- blcc_fe(Xt=Xt, Wt=W, mats=mats, covreg=CR_algo, init=CR_init, 
+                            max_iter=CR_maxiter, tol=CR_tol, S0=CR_S0init, B=CR_Binit, verb=CR_verb, term=CR_term) 
+    
+  cc_Sigma <- tSigma_optim(BS0=cc_BS0_feature, X=Xt)
+  sqrt_inv_Sigma <- sqrt_inv_build(cc_Sigma$tSigma)
+
+
+  return(sqrt_inv_Sigma)  
+}
+
+tmp <- bl_endogenous_estim(yields=yields, lambdas=lambdas, cutoffs=c(4,8), reference="usa", curves=curves,mats=mats)
 ```
 

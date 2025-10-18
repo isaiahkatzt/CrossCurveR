@@ -5,7 +5,7 @@ source("curve_reformat.R")
 #     Normalized Component Construction     #
 #############################################
 
-bln_permutation <- function(mats, curves) {
+bln_build_P <- function(curves, mats) {
   ## build permutation matrix P swapping curve <-> tenor ordering
   M <- length(mats)
   D <- length(curves)
@@ -33,15 +33,14 @@ bln_Hb <- function(HT, P, sqrt_inv_sigmaT) {
 bln_YB <- function(PY, sqrt_inv_sigmaT) {
   ## compute \breve{Y} across all days  
   N <- nrow(PY) 
-  time <- PY[, 1]
-  YB_matrix <- matrix(NA, nrow = N, ncol = ncol(PY) - 1)
+  YB_matrix <- matrix(NA, nrow = N, ncol = ncol(PY))
   
   ## compute Sigma %*% t(PY[t, ]) <-> PY[t, ] %*% t(Sigma) 
   for (dt in seq_len(N)) {
-    YB_matrix[dt, ] <- as.numeric(PY[dt, -1]) %*% t(sqrt_inv_sigmaT[[dt]])
+    YB_matrix[dt, ] <- as.numeric(PY[dt, ]) %*% t(sqrt_inv_sigmaT[[dt]])
   }
   
-  YB <- data.frame(time, YB_matrix)
+  YB <- data.frame(YB_matrix)
   colnames(YB) <- colnames(PY) 
   return(YB)
 }

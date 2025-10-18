@@ -19,22 +19,23 @@ numeric_to_matname <- function(numeric_mat) {
   return(colname)
 }
 
-vecY <- function(yields) {
+vecY <- function(yields, curves, mats) {
   ## embed yield matrix Y as MD-dimensional vector 
+  mat_str <- sapply(mats, numeric_to_matname)
+  mds <- as.vector(t(outer(curves, mat_str, paste, sep='.')))
   Y_tilde <- do.call(cbind, c(yields[1], lapply(yields[-1], function(y) y[, -1, drop = FALSE])))
+  colnames(Y_tilde) <- c("time", mds) 
+    
   return(list(tY = Y_tilde[,-1], time = Y_tilde[,1]))
 }
 
-#### STOPPING POINT HERE; NOTE SHIFT IN VECY STRUCTURE 
 
 PY_full <- function(vecY, P) {
-  ## full timeframe permuted y 
-  time <- vecY[, 1]
-  vecY_matrix <- as.matrix(vecY[, -1]) 
-  permuted_colnames <- colnames(vecY)[-1][apply(P, 1, which.max)]
-  PYt <- vecY_matrix %*% t(P)
-  PY <- data.frame(time = time, as.matrix(PYt))
-  colnames(PY) <- c("time", permuted_colnames)
-  
-  return(PY)
+  vm_Y <- as.matrix(vecY) 
+  permuted_colnames <- colnames(vecY)[apply(P, 1, which.max)]
+  PYt <- vm_Y %*% t(P)
+  PY <- data.frame(as.matrix(PYt))
+  colnames(PY) <- permuted_colnames
+  return(list(py = PY, cn = permuted_colnames))
 }
+

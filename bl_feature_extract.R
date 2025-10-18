@@ -1,7 +1,7 @@
 source("packages.R")
 source("curve_reformat.R")
 
-#############################################
+ #############################################
 #            Feature Extraction             #
 #############################################
 
@@ -102,7 +102,7 @@ blcc_build_Wj <- function(curve_nsfit, mats){
   return(Wj = wj_full)
 }
 
-blcc_fe <- function(Xt, Wt, mats, trunc = TRUE, covreg=zero_mean_covreg,
+blcc_fe <- function(Xt, Wt, mats, covreg=zero_mean_covreg,
                     init = "adaptive", max_iter = 1000, tol = 1e-10, S0 = NULL, B = NULL, verb = FALSE, term = FALSE) {
   ## baseline cross-curve feature extraction
   BS0_list <- lapply(Wt, function(Wj) {

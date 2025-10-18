@@ -18,3 +18,8 @@ symmPSD_sqrt <- function(sPSD) {
   return(sqrt_sPSD)
 }
 
+sqrt_inv_build <- function(cov_matrix_ts) {
+  sqrt_matrix_ts <- lapply(cov_matrix_ts, symmPSD_sqrt) 
+  inv_matrix_ts <- lapply(sqrt_matrix_ts, function(matrix) solve(matrix)) 
+  return(list(sqrt=sqrt_matrix_ts, inverse=inv_matrix_ts))
+}
