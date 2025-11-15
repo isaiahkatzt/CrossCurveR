@@ -1,0 +1,36 @@
+---
+title: "reconstruction_testing"
+author: "Isaiah Katz"
+date: "2025-11-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(microbenchmark)
+
+source("data_formatting/dr_formatting.R")
+source("core_formatting.R")
+```
+
+
+```{r}
+## read-in raw unformatted data 
+usa_raw <- read.csv("raw_data/USA_raw.csv")
+gbr_raw <- read.csv("raw_data/GBR_raw.csv") 
+jpn_raw <- read.csv("raw_data/JPN_raw.csv")
+cad_raw <- read.csv("raw_data/CAD_raw.csv")
+
+mats = c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360)
+
+```
+
+```{r}
+## validate format 
+jkl <- .validate_input_data(usa_raw, mats = c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360))
+
+tmp <- dr_yield_format(usa_raw, mats=mats, start_date="2000-01-01", end_date = "2012-01-01")
+tmp
+```
+

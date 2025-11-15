@@ -14,10 +14,10 @@ source("curve_reformat.R")
 ```
 
 ```{r}
-usa <- read.csv("reconstructed-data/usa-bs.csv")
-gbr <- read.csv("reconstructed-data/gbr-bs.csv")
-jpn <- read.csv("reconstructed-data/jpn-bs.csv")
-cad <- read.csv("reconstructed-data/cad-bs.csv")
+usa <- read.csv("reconstructed_data/usa-bs.csv")
+gbr <- read.csv("reconstructed_data/gbr-bs.csv")
+jpn <- read.csv("reconstructed_data/jpn-bs.csv")
+cad <- read.csv("reconstructed_data/cad-bs.csv")
 
 yields <- list(usa[1:250, ], gbr[1:250, ], jpn[1:250, ], cad[1:250, ])
 curves <- c("usa", "gbr", "jpn", "cad")
