@@ -24,13 +24,119 @@ cad_raw <- read.csv("raw_data/CAD_raw.csv")
 
 mats = c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360)
 
+start_date <- "2000-01-01"
+end_date <- "2000-01-30"
+
+
 ```
 
 ```{r}
 ## validate format 
-jkl <- .validate_input_data(usa_raw, mats = c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360))
-
-tmp <- dr_yield_format(usa_raw, mats=mats, start_date="2000-01-01", end_date = "2012-01-01")
+tmp <- dr_yield_format(gbr_raw, mats=mats, start_date=start_date, end_date=end_date)
 tmp
 ```
+
+```{r}
+mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360)
+init_date <- "2000-01-01"
+end_date <- "2000-01-30"
+
+## date range selection 
+date_seq <- seq.Date(ymd(start_date), ymd(end_date), by = "day")
+weekday_seq <- date_seq[weekdays(date_seq) %in% c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday")]
+
+dr_daily <- function(yield_data, reference=NULL, tkey="time", threshold = 2){
+
+  if (!is.null(reference)) {
+    ref_match <- match(reference, as.Date(yield_data[[tkey]]))
+    augmented <- matrix(NA, nrow = length(reference), ncol = ncol(yield_data))
+    augmented[!is.na(ref_match), ] <- as.matrix(yield_data[ref_match[!is.na(ref_match)], ])
+    augmented <- data.frame(augmented)
+    colnames(augmented) <- colnames(yield_data)
+    augmented[[tkey]] <- reference
+  } else {
+    augmented <- yield_data
+  }
+
+  num_cols <- setdiff(colnames(augmented), tkey)
+  augmented[num_cols] <- lapply(augmented[num_cols], as.numeric)
+
+  yield_matrix <- as.matrix(augmented[num_cols])
+  nr <- nrow(yield_matrix)
+  nc <- ncol(yield_matrix)
+
+  sparse_yields <- rowSums(!is.na(yield_matrix)) < (threshold + 1)
+  preceding  <- rbind(matrix(NA, 1, nc), yield_matrix[-nr, ])
+  succeeding <- rbind(yield_matrix[-1, ], matrix(NA, 1, nc))
+
+  int_mask <- sparse_yields & is.na(yield_matrix) & 
+              !is.na(preceding) & !is.na(succeeding)
+
+  for (col_id in seq_len(nc)) {
+    row_mask <- int_mask[, col_id]
+    if (any(row_mask)) {
+      yprev <- preceding[row_mask,  col_id]
+      ynext <- succeeding[row_mask, col_id]
+      yield_matrix[row_mask, col_id] <- (yprev + ynext) / 2
+    }
+  }
+
+  augmented[num_cols] <- yield_matrix
+
+  return(augmented)
+}
+
+asdf <- dr_daily(yield_data=tmp, reference=weekday_seq, threshold = 8)
+asdf
+```
+
+```{r} 
+## match dates to reference dates 
+date_match2 <- function(target, reference){
+  target_full <- target
+  target_missing <- rownames(reference)[(!rownames(reference) %in% rownames(target))]
+  target_full[target_missing, ] <- NA
+  target_full <- target_full[order(as.Date(rownames(target_full))), ]
+  target_full
+}
+
+## interpolation for missing daily values 
+date_interpolate2 <- function(target, reference, int_func = c("spline", "approx")){
+  if (int_func == "spline") {
+    int_func <- na.spline
+  } 
+  else if (int_func == "approx") {
+    int_func <- na.approx
+  }
+  else{
+    stop("Invalid daily interpolation function: please use spline or approx.")
+  } 
+  
+  target_match <- date_match2(target, reference)
+  target_int <- as.data.frame(int_func(target_match[, -1]))
+  target_int <- cbind(target_match[, 1], target_int)
+  return(target_int) 
+  colnames(target_int) <- colnames(target_match) 
+  rownames(target_int) <- rownames(reference)
+  target_int
+}
+
+dr_build_seq <- function(yield_data, 
+                         yield_days = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"), 
+                         inc = 0) {
+  tsd <- dim(yield_data)
+  start_date <- yield_data$time[tsd[1]]; end_date <- yield_data$time[tsd[2]]
+  weekday_seq <- date_seq[weekdays(date_seq) %in% yield_days]
+  weekday_df <- data.frame(weekday_seq)
+  rownames(weekday_df) <- weekday_seq
+  return(weekday_df) 
+}
+
+asdf <- date_interpolate2(tmp, weekday_df, "spline")
+storage.mode(asdf[,-1]) <- "numeric"
+asdf[, -1]
+```
+
+
+
 
