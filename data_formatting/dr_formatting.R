@@ -1,5 +1,7 @@
 source("packages.R")
 source("core_formatting.R")
+source("data_formatting/dr_spline.R") 
+source("data_formatting/dr_static_ns.R") 
 
 #############################################
 #           Input Data Formatting           #
@@ -69,17 +71,17 @@ dr_yield_format <- function(data = "", mats = c(), start_date = "", end_date = "
 #      Single-Day Missing Interpolation     #
 #############################################
 
-dr_daily <- function(yield_data, reference=NULL, tkey="time", threshold = 2){
-  
+dr_daily <- function(data, reference=NULL, tkey="time", threshold = 2){
+  ## linear interpolation for sub-thresholded vals  
   if (!is.null(reference)) {
-    ref_match <- match(reference, as.Date(yield_data[[tkey]]))
-    augmented <- matrix(NA, nrow = length(reference), ncol = ncol(yield_data))
-    augmented[!is.na(ref_match), ] <- as.matrix(yield_data[ref_match[!is.na(ref_match)], ])
+    ref_match <- match(reference, as.Date(data[[tkey]]))
+    augmented <- matrix(NA, nrow = length(reference), ncol = ncol(data))
+    augmented[!is.na(ref_match), ] <- as.matrix(data[ref_match[!is.na(ref_match)], ])
     augmented <- data.frame(augmented)
-    colnames(augmented) <- colnames(yield_data)
+    colnames(augmented) <- colnames(data)
     augmented[[tkey]] <- reference
   } else {
-    augmented <- yield_data
+    augmented <- data
   }
   
   num_cols <- setdiff(colnames(augmented), tkey)
@@ -111,7 +113,43 @@ dr_daily <- function(yield_data, reference=NULL, tkey="time", threshold = 2){
 }
 
 #############################################
-#           Spline-Based Bootstrap          #
+#               Curve Builder               #
 #############################################
 
+dr_build_curve <- function(data, nmats=NULL, tkey="time", build=c("spline", "log", "parametric"), 
+                           par_method = c("nelson", "svensson"), 
+                           spline_method = c("fmm", "natural", "hermite", "periodic"), 
+                           complete = FALSE,
+                           precision = 4) {
+  
+  mats <- sapply(colnames(data)[-1], matname_to_numeric, USE.NAMES=FALSE) * 12
+  dmats <- setdiff(nmats, mats) 
+  build = match.arg(build) 
+  
+  for (m in dmats) {
+    mstr <- numeric_to_matname(m) 
+    data[[mstr]] <- NA 
+  }
+  
+  fmats <- sort(c(mats, dmats))
+  fstr <- sapply(fmats, numeric_to_matname, USE.NAMES=FALSE) 
+  ordered_data <- data[c(tkey, fstr)] 
+  
+  build_setup <- switch(
+    build, 
+    spline = list(method = match.arg(spline_method), 
+                  build_func = dr_row_spline), 
+    parametric = list(method = match.arg(par_method), 
+                      build_func = dr_row_model), 
+    log = list(method=NULL, build_func = dr_row_loglin))
+  
+  int_data <- apply(ordered_data, 1, build_setup$build_func, build_setup$method, fmats, complete)
+  
+  
+  int_df <- data.frame(ordered_data[[tkey]], t(int_data)) %>% 
+    mutate(across(-1, ~ round(as.numeric(.x), digits = precision))) 
+  colnames(int_df) <- colnames(ordered_data) 
+  
+  return(int_df) 
+}
 
