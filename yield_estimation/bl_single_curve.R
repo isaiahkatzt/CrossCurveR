@@ -103,3 +103,35 @@ bl_single_curve <- function(lambda_select, yields, cutoffs, mats) {
     curve_H <- bl_bdiag_H(curve_nsfit$W, cutoffs, mats)), c("phi", "betas", "nsfit", "H")
   ))
 }
+
+#############################################
+#       Single-Curve NS and Svensson        #
+#############################################
+
+sc_NSdaily <- function(nt_yields, mats) {
+  # single curve daily lambda NS estimation 
+  dyn_NSparams <- Nelson.Siegel(nt_yields, mats) 
+  dyn_NSphi <- lapply(dyn_NSparams[, 4], NS_loadings, mats) 
+  
+  dyn_NSyields <- matrix(NA, nrow(dyn_NSparams), ncol(dyn_NSphi[[1]]))
+  for (i in seq_len(nrow(dyn_NSparams))) {
+    dyn_NSyields[i, ] <- dyn_NSparams[i, 1:3] %*% dyn_NSphi[[i]]
+  }
+  return(list(NSyields = dyn_NSyields, NSbetas = dyn_NSparams[, 1:3])) 
+}
+
+sc_NSwindow <- function(lambda, nt_yields, mats) {
+  # single lambda NS estimation 
+  win_NSphi <- bl_phi(lambda, mats) 
+  win_NSbetas <- t(win_NSphi$cross_phi %*% t(nt_yields))
+  win_NSfit <- win_NSbetas %*% win_NSphi$phi
+  
+  return(list(NSyields = win_NSfit, NSbetas = win_NSbetas))
+}
+
+sc_Svensson <- function(lambda1, lambda2, nt_yields, mats) {
+  ## static lambda Svensson estimation 
+  win_Svenphi <- sven_phi(lambda1, lambda2, mats) 
+  
+}
+

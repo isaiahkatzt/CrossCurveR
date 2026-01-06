@@ -30,7 +30,7 @@ dr_row_loglin <- function(row, method=NULL, fmat, complete=TRUE) {
   }
   
   row_mask <- !is.na(row_nt) 
-  rloglin <- approxfun(x = fmat[row_mask], y = log(as.numeric(row_nt[row_mask]))) 
+  rloglin <- approxfun(x = fmat[row_mask], y = log(as.numeric(row_nt[row_mask])), rule=2) 
   
   int_row <- exp(rloglin(fmat))
   

@@ -44,3 +44,4 @@ Svensson_loadings <- function(lambda1, lambda2, mats){
   l4 <- ((1 - exp(-mats / lambda2)) / (mats / lambda2)) - exp(-mats / lambda2)
   rbind(l1, l2, l3, l4) 
 }
+
