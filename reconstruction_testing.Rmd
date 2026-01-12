@@ -70,46 +70,6 @@ as <- bl_NSbetas(jkl[1:20,], lo, ph$cross_phi, fmats)
 ```{r}
 source("yield_estimation/bl_single_curve.R")
 
-    #curve_phi <- bl_phi(lambda_select, mats), 
-    #curve_betas <- bl_NSbetas(yields, lambda_select, curve_phi$cross_phi, mats), 
-    #curve_nsfit <- bl_NSfit(curve_betas$m_yield, curve_phi$phi, curve_betas$NSbetas, lambda_select, mats), 
-    #curve_H <- bl_bdiag_H(curve_nsfit$W, cutoffs, mats)), c("phi", "betas", "nsfit", "H")
-
-sc_fit <- function(yields, mats, type = c("nelson", "svensson", "daily"), ts=TRUE,
-                   lambdas = seq(from = 0.001, to = 1, length.out = 100), slambdas = NULL) {
-  type = match.arg(type) 
-  time <- yields[,1]; nt_yield <- yields[,-1] 
-
-  if (type == "daily") {
-    yield_estim <- sc_NSdaily(nt_yield, mats) 
-    model_yields <- yield_estim[[1]] 
-    model_betas <- yield_estim[[2]] 
-  }
-  else if (type == "nelson") {
-    lambda <- lambda_grid_search(lambdas, yields, mats) 
-    yield_estim <- sc_NSwindow(lambda, nt_yield, mats) 
-    model_yields <- yield_estim[[1]]
-    model_betas <- yield_estim[[2]]
-    
-  }
-  else if (type == "svensson") {
-    lambda1 = slambdas[1]; lambda2 = slambdas[2]
-    yield_estim <- sc_Svensson(lambda1, lambda2, nt_yield, mats) 
-    model_yields <- yield_estim[[1]]
-    model_betas <- yield_estim[[2]]
-  }
-  
-  if (!ts) {
-    beta_dynamic <- NA 
-  } 
-  else {
-    beta_dynamic <- apply(model_betas, 2, ar)
-  }
-  
-  return(list(yields = model_yields, betas = model_betas, dynamic = beta_dynamic))
-}
-  
-
 lambdas <- seq(from=0.001, to = 1, length.out=100)
 fit_check <- sc_fit(jkl[1:20,], fmats, type="nelson" )
 fit_check
@@ -119,27 +79,9 @@ qwer <- sc_NSdaily(jkl[1:20,-1], fmats)
 dfj <- sc_NSwindow(lo, jkl[1:20, -1], fmats)
 qwer$NSyields
 
-sc_test <- sc_fit(yields=jkl[1:20,], mats=fmats, type="svensson", ts=TRUE, 
+sc_test <- sc_fit(yields=jkl[1:20,], mats=fmats, type="nelson", ts=TRUE, 
                   slambdas = c(2,3))
 
-sc_test$dynamic$l4
+sc_test$dynamic$l3
 
 ```
-
-```{r}
-bl_phi2 <- function(lambda_optim, mats) {
-  phi <- NS_loadings(lambda_optim, mats) 
-  cross_phi <- solve(tcrossprod(phi)) %*% phi 
-  return(list(phi = phi, cross_phi = cross_phi))
-}
-
-sven_phi <- function(lambda1, lambda2, mats) {
-  phi <- Svensson_loadings(lambda1, lambda2, mats) 
-  cross_phi <- solve(tcrossprod(phi)) %*% phi 
-  return(list(phi = phi, cross_phi = cross_phi)) 
-}
-
-zxcv <- sc_Svensson(2, 3, jkl[1:20,-1], fmats)
-```
-
-

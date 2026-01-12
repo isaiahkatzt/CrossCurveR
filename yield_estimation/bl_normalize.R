@@ -1,18 +1,20 @@
 source("packages.R")
-source("curve_reformat.R")
+source("yield_estimation/curve_reformat.R")
 
 #############################################
 #     Normalized Component Construction     #
 #############################################
 
 bln_build_P <- function(curves, mats) {
-  ## build permutation matrix P swapping curve <-> tenor ordering
-  M <- length(mats)
-  D <- length(curves)
+  M <- length(mats)    
+  D <- length(curves) 
   
   total_size <- M * D
-  original_indices <- seq_len(total_size) 
-  target_indices <- as.vector(matrix(seq_len(total_size), nrow = M, byrow = TRUE))
+  target_indices <- as.vector(
+    matrix(seq_len(total_size), nrow = D, ncol = M, byrow = TRUE)
+  )
+  
+  original_indices <- seq_len(total_size)
   
   P <- Matrix::sparseMatrix(
     i = target_indices,
@@ -45,6 +47,13 @@ bln_YB <- function(PY, sqrt_inv_sigmaT) {
   return(YB)
 }
 
+bln_phi_hat <- function(curve_full_phi, mds) {
+  ## stack phi_hat 
+  curve_phi <- do.call(rbind, lapply(curve_full_phi, function(curve) t(curve[['phi']])))
+  rownames(curve_phi) <- mds 
+  return(curve_phi)
+}
+
 bln_phi_BT <- function(phi_hat, P, sqrt_inv_sigmaT) {
   ## compute \breve{Phi} across all days 
   P_Phi <- P %*% phi_hat 
@@ -58,10 +67,20 @@ bln_phi_BT <- function(phi_hat, P, sqrt_inv_sigmaT) {
   })
 }
 
-
-
-
-
-
-
+bln_phi_CT <- function(phi_BT, P) {
+  ## compute \check{Phi} across all days 
+  tP <- t(P)
+  
+  n <- nrow(phi_BT[[1]])
+  rn <- rownames(phi_BT[[1]])
+  
+  new_indices <- as.numeric(tP %*% seq_len(n))
+  permuted_rn <- rn[new_indices]
+  
+  lapply(phi_BT, function(phi_Bt) {
+    phi_Ct <- tP %*% phi_Bt
+    rownames(phi_Ct) <- permuted_rn
+    phi_Ct
+  })
+}
 

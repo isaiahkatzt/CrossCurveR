@@ -1,4 +1,6 @@
-#### initial yield curve formatting   
+#############################################
+#      Initial Yield Curve Formatting       #
+#############################################
 
 full_matrix_yield <- function(yields, curves) {
   setNames(lapply(yields, function(yield) {
@@ -29,7 +31,12 @@ vecY <- function(yields, curves, mats) {
   return(list(tY = Y_tilde[,-1], time = Y_tilde[,1]))
 }
 
+#############################################
+#        Permutation and Curve Cuts         #
+#############################################
+
 PY_full <- function(vecY, P) {
+  ## yields x permutation matrix 
   vm_Y <- as.matrix(vecY) 
   permuted_colnames <- colnames(vecY)[apply(P, 1, which.max)]
   PYt <- vm_Y %*% t(P)

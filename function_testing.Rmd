@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 library(microbenchmark)
 
-source("curve_reformat.R")
+source("yield_estimation/curve_reformat.R")
 ```
 
 ```{r}
@@ -27,20 +27,20 @@ mat_str = sapply(mats, numeric_to_matname)
 lambdas <- seq(0.01, 0.1, by = 0.005)
 
 mds <- as.vector(t(outer(curves, mat_str, paste, sep='.')))
-
 ```
 
 ```{r}
 ## testing 
 
-source("ns_core.R")
-source("bl_single_curve.R")
-source("bl_feature_extract.R")
+#source("ns_core.R")
+source("yield_estimation/bl_single_curve.R")
+source("yield_estimation/bl_feature_extract.R")
 
 lambda_select_usa <- lambda_grid_search(lambdas, usa[1:250,], mats)
 lambda_select_gbr <- lambda_grid_search(lambdas, gbr[1:250,], mats)
 lambda_select_jpn <- lambda_grid_search(lambdas, jpn[1:250,], mats)
 lambda_select_cad <- lambda_grid_search(lambdas, cad[1:250,], mats)
+
 
 #microbenchmark(
 #  func1 = lambda_grid_search(lambdas, usa[1:100,], mats), 
@@ -60,31 +60,78 @@ Xt = blcc_build_Xt(test_ccVARs$cc_cspread,)
 W = blcc_build_Wj(tsc_list$nsfit, mats) # done 
 H <- bdiag(usa_curve$H, gbr_curve$H, jpn_curve$H, cad_curve$H) # done 
 Y <- vecY(yields, curves, mats) # done 
+
 ```
 
 ```{r}
-source("cr_core_estim.R")
-source("matrix_helpers.R")
+source("yield_estimation/cr_core_estim.R")
+source("yield_estimation/matrix_helpers.R")
 
-test_BS0 <- blcc_fe(Xt=Xt, Wt=W, mats=mats, init="adaptive")
-ts <- tSigma_optim(test_BS0, Xt)
+test_BS0 <- blcc_fe(Xt=Xt, Wt=W, mats=mats, init="adaptive") # done 
+ts <- tSigma_optim(test_BS0, Xt) # done 
 
-sqrt_sigma_t <- lapply(ts$tSigma, symmPSD_sqrt)
-sqrt_inv_sigma_t <- lapply(sqrt_sigma_t, solve)
-
+sqrt_sigma_t <- lapply(ts$tSigma, symmPSD_sqrt) # done 
+sqrt_inv_sigma_t <- lapply(sqrt_sigma_t, solve) # done 
 ```
-
 
 ```{r}
-source("bl_normalize.R")
-P <- bln_build_P(mats, curves)
-pY <- PY_full(Y$tY, P)
+source("yield_estimation/bl_normalize.R")
+P <- bln_build_P(mats, curves) # done 
+pY <- PY_full(Y$tY, P) # done  
 
-yb <- bln_YB(pY$py[1:250,], sqrt_inv_sigma_t)
-phib <-  bln_phi_BT(phihat, P, sqrt_inv_sigma_t)
+yb <- bln_YB(pY$py, sqrt_inv_sigma_t) # done 
 
-colnames(pY$py)
+phi_hat <- bln_phi_hat(tsc_list$phi, mds) # done 
+phib <-  bln_phi_BT(phi_hat, P, sqrt_inv_sigma_t) # done 
+
+phic <- bln_phi_CT(phib, P) # done 
+yc <- PY_full(yb, t(P))
 ```
+
+```{r}
+### TO DO 01/12: REFORMULATE THESE FUNCTS FOR NEW STRUCT 
+
+bln_YC <- PY_full(yb, P)
+bln_YC
+
+
+bln_rescale_beta_NS <- function(yield, check_phi, mats){
+  ## single curve DNS fit; inputs curve yield, loadings, mats
+  N <- dim(yield)[1]
+  mat_str <- paste0("X", lapply(mats, numeric_to_matname))
+  matrix_yield <- as.matrix(yield[-1]) 
+  daily_betas <- matrix(data = NA, nrow = N, ncol = 3) 
+  NS_fit <- matrix(data = NA, nrow = N, ncol = length(mats))
+  
+  ## NS computation 
+  for (i in 1:N) {
+    crosscheck_phi <- solve(crossprod(check_phi[[i]])) %*% t(check_phi[[i]])
+    daily_betas[i, ] <- matrix(t(crosscheck_phi %*% matrix_yield[i, ]))
+    NS_fit[i, ] <- matrix(check_phi[[i]] %*% daily_betas[i, ])
+  }
+}
+
+bln_component_check <- function(breve_Y, breve_phi, breve_H, P, curves, mats) {
+  ## tabulate \check{Y}, \check{phi}, \check{H}, \check{beta} and \star{Y} 
+  check_phi <- phi_CT(phi_BT = breve_phi, P = P)
+  check_Y <- PY_full(vecY = breve_Y, P = t(P))
+  curve_checkY <- curve_partition(Yc = check_Y, curves = curves, mats = mats) 
+  curve_checkPhi <- phi_partition(phi_C = check_phi, curves = curves, mats = mats) 
+  ystar_betacheck <- ystar_betaCT_optim(curve_check_Y = curve_checkY, curve_check_phi = curve_checkPhi, curves=curves, mats=mats) 
+  check_H <- lapply(breve_H, function(HB_t) t(P) %*% HB_t %*% P)
+  
+  return(list(
+    y_star = ystar_betacheck$y_star, 
+    beta_check = ystar_betacheck$beta_check, 
+    curve_check_Y = curve_checkY, 
+    curve_check_phi = curve_checkPhi, 
+    check_H = check_H
+  ))
+}
+
+```
+
+
 
 ```{r}
 bl_endogenous_estim <- function(yields, lambdas, cutoffs, reference, 
@@ -93,37 +140,50 @@ bl_endogenous_estim <- function(yields, lambdas, cutoffs, reference,
                                 CR_maxiter=1000, CR_tol=1e-8, CR_Binit=NULL, CR_S0init=NULL, CR_verb=FALSE, CR_term=TRUE, 
                                 curves, mats) {
   
+  ## build maturity x tenor strings 
+  mat_str <- sapply(mats, numeric_to_matname)
+  mds <- as.vector(t(outer(curves, mat_str, paste, sep='.')))
+  
   ## build vector yield embedding and permutation matrix  
   Y <- vecY(yields, curves, mats)   
   P <- bln_build_P(curves, mats)  
-  
+  pY <- PY_full(Y[['tY']], P)
+
   ## grid search lambda construction (to do: KF estimation) 
   curve_lambdas <- vapply(yields, function(x) { 
     lambda_grid_search(lambdas, x, mats)
     }, numeric(1) 
   )
   
+  ## NS baseline estimation (no cross-curve) 
   bl_yields <- transpose(setNames(lapply(seq_along(yields), function(x) {
     bl_single_curve(curve_lambdas[x], yields[[x]], cutoffs, mats)
     }
   ), curves)) 
   
+  ## residuals by tenor; within-curve full covariance  
+  phi_hat <- bln_phi_hat(bl_yields$phi, mds) 
   W <- blcc_build_Wj(bl_yields$nsfit, mats) 
   H <- bdiag(bl_yields$H) 
   
+  ## feature extraction 
   cc_ci_features <- blcc_cointegration(blsc_list=bl_yields, curves=curves, reference=reference, 
                                        estim=ECM_estim, type=ECM_type, alpha=ECM_alpha, normalize=X_normalize)
   
   Xt <- blcc_build_Xt(cc_ci_features$cc_cspread, cc_ci_features$cc_ecm, trunc=X_trunc) 
   
+  ## covariance regression and sigma estimation 
   cc_BS0_feature <- blcc_fe(Xt=Xt, Wt=W, mats=mats, covreg=CR_algo, init=CR_init, 
                             max_iter=CR_maxiter, tol=CR_tol, S0=CR_S0init, B=CR_Binit, verb=CR_verb, term=CR_term) 
     
   cc_Sigma <- tSigma_optim(BS0=cc_BS0_feature, X=Xt)
   sqrt_inv_Sigma <- sqrt_inv_build(cc_Sigma$tSigma)
 
+  ## breve components 
+  yb <- bln_YB(pY[['py']], sqrt_inv_sigma_t) 
+  phib <- bln_phi_BT(phi_hat, P, sqrt_inv_sigma_t)
 
-  return(sqrt_inv_Sigma)  
+  return(phib)  
 }
 
 tmp <- bl_endogenous_estim(yields=yields, lambdas=lambdas, cutoffs=c(4,8), reference="usa", curves=curves,mats=mats)

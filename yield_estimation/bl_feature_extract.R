@@ -1,5 +1,5 @@
 source("packages.R")
-source("curve_reformat.R")
+source("yield_estimation/curve_reformat.R")
 
  #############################################
 #            Feature Extraction             #
