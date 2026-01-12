@@ -29,7 +29,6 @@ vecY <- function(yields, curves, mats) {
   return(list(tY = Y_tilde[,-1], time = Y_tilde[,1]))
 }
 
-
 PY_full <- function(vecY, P) {
   vm_Y <- as.matrix(vecY) 
   permuted_colnames <- colnames(vecY)[apply(P, 1, which.max)]

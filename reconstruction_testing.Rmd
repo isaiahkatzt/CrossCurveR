@@ -12,6 +12,7 @@ library(microbenchmark)
 
 source("data_formatting/dr_formatting.R")
 source("core_formatting.R")
+source("yield_estimation/bl_single_curve.R")
 
 ```
 
@@ -48,8 +49,6 @@ date_seq <- seq.Date(ymd(start_date), ymd(end_date), by = "day")
 weekday_seq <- date_seq[weekdays(date_seq) %in% c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday")]
 
 asdf <- dr_daily(data=tmp, reference=weekday_seq, threshold = 8)
-
-lambdas
 ```
 
 ```{r} 
@@ -100,7 +99,14 @@ sc_fit <- function(yields, mats, type = c("nelson", "svensson", "daily"), ts=TRU
     model_betas <- yield_estim[[2]]
   }
   
-  return(list(yields = model_yields, betas = model_betas))
+  if (!ts) {
+    beta_dynamic <- NA 
+  } 
+  else {
+    beta_dynamic <- apply(model_betas, 2, ar)
+  }
+  
+  return(list(yields = model_yields, betas = model_betas, dynamic = beta_dynamic))
 }
   
 
@@ -111,13 +117,29 @@ fit_check
 
 qwer <- sc_NSdaily(jkl[1:20,-1], fmats)
 dfj <- sc_NSwindow(lo, jkl[1:20, -1], fmats)
-qwer
+qwer$NSyields
 
-lambda_grid_search(lambdas, jkl[1:20,], fmats)
+sc_test <- sc_fit(yields=jkl[1:20,], mats=fmats, type="svensson", ts=TRUE, 
+                  slambdas = c(2,3))
 
-ajajs <- ar(qwer$NSbetas[,1])
-ajajs$ar
+sc_test$dynamic$l4
+
 ```
 
+```{r}
+bl_phi2 <- function(lambda_optim, mats) {
+  phi <- NS_loadings(lambda_optim, mats) 
+  cross_phi <- solve(tcrossprod(phi)) %*% phi 
+  return(list(phi = phi, cross_phi = cross_phi))
+}
+
+sven_phi <- function(lambda1, lambda2, mats) {
+  phi <- Svensson_loadings(lambda1, lambda2, mats) 
+  cross_phi <- solve(tcrossprod(phi)) %*% phi 
+  return(list(phi = phi, cross_phi = cross_phi)) 
+}
+
+zxcv <- sc_Svensson(2, 3, jkl[1:20,-1], fmats)
+```
 
 

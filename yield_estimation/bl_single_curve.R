@@ -37,6 +37,12 @@ bl_phi <- function(lambda_optim, mats) {
   return(list(phi = phi, cross_phi = cross_phi))
 }
 
+sven_phi <- function(lambda1, lambda2, mats) {
+  phi <- Svensson_loadings(lambda1, lambda2, mats) 
+  cross_phi <- solve(tcrossprod(phi)) %*% phi 
+  return(list(phi = phi, cross_phi = cross_phi)) 
+}
+
 bl_NSbetas <- function(yield, lambda_optim, cross_phi, mats) {
   matrix_yield <- as.matrix(yield[-1]) 
   NSbetas <- t(cross_phi %*% t(matrix_yield))
@@ -132,6 +138,43 @@ sc_NSwindow <- function(lambda, nt_yields, mats) {
 sc_Svensson <- function(lambda1, lambda2, nt_yields, mats) {
   ## static lambda Svensson estimation 
   win_Svenphi <- sven_phi(lambda1, lambda2, mats) 
+  win_Svenbetas <- t(win_Svenphi$cross_phi %*% t(nt_yields)) 
+  win_Svenfit <- win_Svenbetas %*% win_Svenphi$phi 
   
+  return(list(Svenyields = win_Svenfit, Svenbetas = win_Svenbetas))
+}
+
+sc_fit <- function(yields, mats, type = c("nelson", "svensson", "daily"), ts=TRUE,
+                   lambdas = seq(from = 0.001, to = 1, length.out = 100), slambdas = NULL) {
+  type = match.arg(type) 
+  time <- yields[,1]; nt_yield <- yields[,-1] 
+  
+  if (type == "daily") {
+    yield_estim <- sc_NSdaily(nt_yield, mats) 
+    model_yields <- yield_estim[[1]] 
+    model_betas <- yield_estim[[2]] 
+  }
+  else if (type == "nelson") {
+    lambda <- lambda_grid_search(lambdas, yields, mats) 
+    yield_estim <- sc_NSwindow(lambda, nt_yield, mats) 
+    model_yields <- yield_estim[[1]]
+    model_betas <- yield_estim[[2]]
+    
+  }
+  else if (type == "svensson") {
+    lambda1 = slambdas[1]; lambda2 = slambdas[2]
+    yield_estim <- sc_Svensson(lambda1, lambda2, nt_yield, mats) 
+    model_yields <- yield_estim[[1]]
+    model_betas <- yield_estim[[2]]
+  }
+  
+  if (!ts) {
+    beta_dynamic <- NA 
+  } 
+  else {
+    beta_dynamic <- apply(model_betas, 2, ar)
+  }
+  
+  return(list(yields = model_yields, betas = model_betas, dynamic = beta_dynamic))
 }
 
