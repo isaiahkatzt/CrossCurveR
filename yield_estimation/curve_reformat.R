@@ -1,3 +1,5 @@
+source("core_formatting.R")
+
 #############################################
 #      Initial Yield Curve Formatting       #
 #############################################
@@ -21,14 +23,21 @@ numeric_to_matname <- function(numeric_mat) {
   return(colname)
 }
 
-vecY <- function(yields, curves, mats) {
+vecY <- function(yields, curves, mats, ts=TRUE) {
   ## embed yield matrix Y as MD-dimensional vector 
   mat_str <- sapply(mats, numeric_to_matname)
   mds <- as.vector(t(outer(curves, mat_str, paste, sep='.')))
-  Y_tilde <- do.call(cbind, c(yields[1], lapply(yields[-1], function(y) y[, -1, drop = FALSE])))
-  colnames(Y_tilde) <- c("time", mds) 
-    
-  return(list(tY = Y_tilde[,-1], time = Y_tilde[,1]))
+  
+  if (!ts) {
+    Y_tilde <- do.call(cbind, yields)
+    colnames(Y_tilde) <- mds 
+    return(list(tY=Y_tilde))
+  }
+  else {
+    Y_tilde <- do.call(cbind, c(yields[1], lapply(yields[-1], function(y) y[, -1, drop = FALSE])))
+    colnames(Y_tilde) <- c("time", mds) 
+    return(list(tY=Y_tilde[,-1], time=Y_tilde[,1]))
+  }
 }
 
 #############################################
@@ -45,3 +54,30 @@ PY_full <- function(vecY, P) {
   return(list(py = PY, cn = permuted_colnames))
 }
 
+cf_curve_cut <- function(vecY, curves, mats) {
+  M <- length(mats)
+  D <- length(curves)
+  
+  cut_points <- rep(seq_len(D), each = M)
+  
+  cut_curve <- split(seq_len(ncol(vecY)), cut_points)
+  cut_curve <- lapply(cut_curve, function(j) vecY[, j, drop = FALSE])
+  
+  names(cut_curve) <- curves
+  return(cut_curve) 
+}
+
+
+cf_phi_cut <- function(vphi, curves, mats) {
+  M <- length(mats) 
+  D <- length(curves) 
+  
+  cut_points <- rep(seq_len(D), each = M) 
+  
+  cut_phi <- lapply(seq_len(D), function(j) {
+    lapply(vphi, function(cuts) cuts[cut_points == j, , drop = FALSE] )
+  }) 
+  
+  names(cut_phi) <- curves
+  return(cut_phi) 
+}

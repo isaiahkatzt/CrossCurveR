@@ -6,23 +6,22 @@ source("yield_estimation/curve_reformat.R")
 #############################################
 
 bln_build_P <- function(curves, mats) {
-  M <- length(mats)    
-  D <- length(curves) 
+  ## build curve <-> tenor permutation matrix  
+  M <- length(mats)
+  D <- length(curves)
   
-  total_size <- M * D
-  target_indices <- as.vector(
-    matrix(seq_len(total_size), nrow = D, ncol = M, byrow = TRUE)
-  )
+  m <- rep(seq_len(M), each = D)
+  d <- rep(seq_len(D), times = M)
   
-  original_indices <- seq_len(total_size)
+  j <- (d - 1) * M + m # curve-major
+  i <- (m - 1) * D + d # tenor-major
   
-  P <- Matrix::sparseMatrix(
-    i = target_indices,
-    j = original_indices,
+  Matrix::sparseMatrix(
+    i = i,
+    j = j,
     x = 1,
-    dims = c(total_size, total_size)
+    dims = c(M * D, M * D)
   )
-  return(P)
 }
 
 bln_Hb <- function(HT, P, sqrt_inv_sigmaT) {
@@ -84,3 +83,37 @@ bln_phi_CT <- function(phi_BT, P) {
   })
 }
 
+bln_rescale_beta_NS <- function(yield, check_phi, mats) {
+  ## single curve rescaled estimates 
+  N <- dim(yield)[1]
+  mat_str <- paste0("X", lapply(mats, numeric_to_matname))
+  matrix_yield <- as.matrix(yield) 
+  daily_betas <- matrix(data = NA, nrow = N, ncol = 3) 
+  NS_fit <- matrix(data = NA, nrow = N, ncol = length(mats))
+  
+  ## NS computation 
+  for (i in 1:N) {
+    crosscheck_phi <- solve(crossprod(check_phi[[i]])) %*% t(check_phi[[i]])
+    daily_betas[i, ] <- matrix(t(crosscheck_phi %*% matrix_yield[i, ]))
+    NS_fit[i, ] <- matrix(check_phi[[i]] %*% daily_betas[i, ])
+  }
+  
+  colnames(NS_fit) <- mat_str
+  return(list(
+    yhat = NS_fit, 
+    betahat = daily_betas))
+}
+
+bln_normalized_fit <- function(cut_yield, cut_phi, curves, mats) {
+  stable_yield <- lapply(seq_along(cut_yield), function(curve) {
+    bln_rescale_beta_NS(cut_yield[[curve]], cut_phi[[curve]], mats) 
+  })
+  names(stable_yield) <- curves 
+  
+  stable_ystar <- lapply(stable_yield, `[[`, "yhat") 
+  stable_beta <- lapply(stable_yield, `[[`, "betahat")
+  
+  return(list(
+    n_yield=stable_ystar, 
+    n_beta=stable_beta)) 
+}
