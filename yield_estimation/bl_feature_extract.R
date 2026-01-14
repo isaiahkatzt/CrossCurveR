@@ -56,7 +56,7 @@ blmc_cspread <- function(cc_betas, Gmatrix, normalize = TRUE) {
 
 blmc_Fselect <- function(Fmatrix) {
   reversion_norm <- sqrt(colSums(Fmatrix^2))
-  
+  return(which.max(reversion_norm))
 }
 
 blcc_cointegration <- function(blsc_list, curves, reference, estim = "ML", type = "eigen", alpha = 0.1, normalize = TRUE) {
@@ -85,15 +85,16 @@ blcc_build_Xt <- function(cc_cspread, cc_ecm, trunc = FALSE) {
   if (!trunc) {
     Xt <- do.call(cbind, cc_cspread) 
   } else {
-  ## placeholder condition for testing  
-    Xt <- do.call(cbind, lapply(cc_cspread, function(x) x[, 1]))
+    Fmatrix_list <- lapply(cc_ecm, `[[`, "Fmatrix")
+    Fnorms <- lapply(Fmatrix_list, blmc_Fselect)
+    Xt <- do.call(cbind, lapply(seq_along(cc_cspread), function(x) cc_cspread[[x]][, Fnorms[[x]]]))
   }
   return(Xt) 
 }
 
 blcc_build_Wj <- function(curve_nsfit, mats){
   ## construct tenor-specific Wj list 
-  wc_list <- lapply(curve_nsfit, `[[`, 1) 
+  wc_list <- lapply(curve_nsfit, `[[`, 2) 
   mat_names <- paste0("X", sapply(mats, numeric_to_matname))
   wj_full <- setNames(lapply(seq_along(mats), function(i) {
     do.call(cbind, lapply(wc_list, function(x) x[, i])) 
@@ -141,4 +142,40 @@ tSigma_optim <- function(BS0, X) {
   })
   return(list(tSigma = sigma_t_full, jSigma = sigma_j_full))
 }
+
+#############################################
+#      Cointegration Spread Smoothers       #
+#############################################
+
+fe_kp_quantile <- function(time, knot_count = 5) {
+  x <- as.numeric(as.Date(time))
+  probs <- seq(0, 1, length.out = knot_count + 2)  
+  knots <- quantile(x, probs = probs)[-c(1, knot_count + 2)] 
+  
+  return(knots)
+}
+
+fe_spline_basis <- function(spline_type = c("ns", "bs"), degree = 3) {
+  spline_type <- match.arg(spline_type)
+  spline_basis <- switch(
+    spline_type,
+    ns = function(x, knots) splines::ns(x, knots = knots),
+    bs = function(x, knots) splines::bs(x, knots = knots, degree = degree),
+  )
+  return(spline_basis) 
+}
+
+fe_xt_spline <- function(time, xt, knot_points, spline_fit = c("ns", "bs"), degree = 3) {
+  ## cspread smoothing  
+  spline_basis <- fe_spline_basis(spline_fit, degree)
+  time <- as.numeric(as.Date(time))
+  
+  basis_matrix <- spline_basis(time, knots = knot_points)
+  
+  spline_model <- lm(xt ~ basis_matrix)
+  xt_smooth <- predict(spline_model)
+  return(xt_smooth) 
+}
+
+
 
