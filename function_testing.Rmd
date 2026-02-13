@@ -34,9 +34,17 @@ lambdas <- seq(0.01, 0.1, by = 0.005)
 
 ```{r}
 ## primary test 
-set.seed(1024)
+set.seed(999)
 tmp <- mc_fit_end(yields=yields, lambdas=lambdas, cutoffs=c(4,8), reference="usa", curves=curves,mats=mats, X_trunc=TRUE, 
                   Xt_smooth=FALSE, smoother="bs", knot_count=6)
+
+x1_synth <- arima.sim(model = list(ar=c(0.9)), 250)
+x2_synth <- arima.sim(model = list(ar=c(-0.9)), 250)
+xt_synth <- cbind(x1_synth, x2_synth)
+
+tmp2 <- mc_fit_exo(yields=yields, lambdas=lambdas, Xt=xt_synth, cutoffs=c(4,8), reference="usa", curves=curves, mats=mats, 
+                   Xt_smooth=TRUE, smoother="ns", knot_count=6)
+
 ```
 
 
