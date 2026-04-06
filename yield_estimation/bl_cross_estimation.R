@@ -41,7 +41,7 @@ blce_rescale_yield <- function(normalized, sqrt_sigma_t, P, ptype = c("tenor", "
 
 mc_fit_end <- function(yields, lambdas, cutoffs, reference, 
                        ECM_estim="ML", ECM_type="eigen", ECM_alpha=0.1, X_normalize=TRUE, X_trunc=FALSE,
-                       CR_algo=zero_mean_covreg, CR_init="adaptive", Xt_smooth=FALSE, smoother=c("ns", "bs"), knot_count=5,
+                       CR_algo=zero_mean_covreg, CR_init="adaptive", Xt_smooth=FALSE, smoother=c("ns", "bs", "rm"), k_count=9, k_pass=3,
                        CR_maxiter=1000, CR_tol=1e-8, CR_Binit=NULL, CR_S0init=NULL, CR_verb=FALSE, CR_term=TRUE, 
                        curves, mats) {
   ## full endogenous covariate fit 
@@ -80,8 +80,13 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
   Xt <- blcc_build_Xt(cc_ci_features$cc_cspread, cc_ci_features$cc_ecm, trunc=X_trunc) 
   
   if (Xt_smooth){
-    kps <- fe_kp_quantile(time=ytime, knot_count=knot_count)
-    Xt <- apply(Xt, 2, fe_xt_spline, time=ytime, spline_fit=smoother, knot_points=kps)
+    if (smoother == "rm"){
+      Xt <- fe_xt_rm(Xt, k_count, k_pass)
+    }
+    else{
+      kps <- fe_kp_quantile(time=ytime, knot_count=knot_count)
+      Xt <- apply(Xt, 2, fe_xt_spline, time=ytime, spline_fit=smoother, knot_points=kps)
+    }
   }
   
   ## covariance regression and sigma estimation 

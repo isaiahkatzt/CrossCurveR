@@ -4,6 +4,19 @@ source("packages.R")
 #      Baseline Single Curve Estimation     #
 #############################################
 
+l2_loss_ls <- function(lambda_grid, daily_yield, mats) {
+  n <- length(lambda_grid)
+  loss_row <- numeric(n)  
+  factor_loadings <- lapply(lambda_grid, NS_loadings_ls, mats)
+  
+  for (i in seq_along(lambda_grid)) {
+    X <- t(factor_loadings[[i]])  
+    fit <- lm.fit(X, daily_yield)  
+    loss_row[i] <- sum(fit$residuals^2)  
+  }
+  loss_row
+}
+
 l2_loss_lambda <- function(lambda_grid, daily_yield, mats) {
   n <- length(lambda_grid)
   loss_row <- numeric(n)  
@@ -17,14 +30,14 @@ l2_loss_lambda <- function(lambda_grid, daily_yield, mats) {
   loss_row
 }
 
-lambda_grid_search <- function(lambda_grid, yields, mats) {  
+lambda_grid_search <- function(lambda_grid, yields, mat, loss = l2_loss_lambda) {  
   ## fast search lambda grid 
   yields <- as.matrix(yields[, -1, drop = FALSE])  
   N <- nrow(yields)
   n <- length(lambda_grid)
   
-  ## vectorized loss computation 
-  loss_matrix <- t(vapply(seq_len(N), function(i) l2_loss_lambda(lambda_grid, yields[i, ], mats), numeric(n)))
+  ## loss computation 
+  loss_matrix <- t(vapply(seq_len(N), function(i) loss(lambda_grid, yields[i, ], mats), numeric(n)))
   
   ## optimal lambda selection; varies across curves! 
   optimal_lambda <- lambda_grid[which.min(colSums(loss_matrix))]

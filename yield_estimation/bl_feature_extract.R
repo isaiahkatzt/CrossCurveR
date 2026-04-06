@@ -6,7 +6,7 @@ source("yield_estimation/curve_reformat.R")
 #############################################
 
 blmc_phi <- function(bl_sc_list){
-  return(t(do.call(cbind, lapply(tsc_list$phi, `[[`, "phi"))))
+  return(t(do.call(cbind, lapply(bl_sc_list$phi, `[[`, "phi"))))
 }
 
 blmc_VAR <- function(blsc_list, reference, curves) {
@@ -175,6 +175,22 @@ fe_xt_spline <- function(time, xt, knot_points, spline_fit = c("ns", "bs"), degr
   spline_model <- lm(xt ~ basis_matrix)
   xt_smooth <- predict(spline_model)
   return(xt_smooth) 
+}
+
+fe_xt_rm <- function(X, k = 21, passes = 2) {
+  h <- (k - 1) %/% 2
+  w <- rep(1, k)
+  
+  apply(X, 2, function(col) {
+    y <- col
+    n <- length(y)
+    for (p in seq_len(passes)) {
+      num <- convolve(y, w, type = "open")[(h + 1):(h + n)]
+      den <- convolve(rep(1, n), w, type = "open")[(h + 1):(h + n)]
+      y <- num / den
+    }
+    y
+  })
 }
 
 

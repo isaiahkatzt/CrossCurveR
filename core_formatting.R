@@ -30,6 +30,12 @@ matname_to_numeric <- function(colname){
 #       Cross-Module Parametric Fits        #
 #############################################
 
+NS_loadings_ls <- function(lambda, mats){
+  l1 <- rep(1, length(mats)) 
+  l2 <- (1 - exp(-mats * lambda)) / (lambda * mats) 
+  rbind(l1, l2) 
+}
+
 NS_loadings <- function(lambda, mats){
   l1 <- rep(1, length(mats))
   l2 <- (1 - exp(-mats * lambda)) / (lambda * mats) 

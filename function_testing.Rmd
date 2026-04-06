@@ -11,6 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(microbenchmark)
 
 source("yield_estimation/bl_cross_estimation.R")
+source("yield_estimation/dly_mcm.R")
 
 ```
 
@@ -28,25 +29,44 @@ aus <- read.csv("reconstructed_data/aus-bs-ib.csv")
 yields <- list(usa[1:250, ], gbr[1:250, ], jpn[1:250, ], cad[1:250, ], ger[1:250, ], fra[1:250, ], itl[1:250, ], aus[1:250,])
 curves <- c("usa", "gbr", "jpn", "cad", "ger", "fra", "itl", "aus")
 mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360) 
-lambdas <- seq(0.01, 0.1, by = 0.005)
+lambdas <- seq(0.01, 0.1, by = 0.001)
 
 ```
+
+```{r}
+dlysc <- dly_all_sc(lambdas, yields, mats)
+dlyb <- dly_pull_beta(dlysc, curves)
+
+dly_group_factor <- function(sc_full, curves, latent=c("L", "S")) {
+  latent = match.arg(latent, c("L", "S"))
+  latent <- ifelse(latent=="L", 1, 2) 
+  curve_beta <- dly_pull_beta(sc_full, curves) 
+  factor_draw <- do.call(cbind, lapply(curve_beta, function(d) d[, latent]))
+  return(factor_draw) 
+}
+
+bgroup <- dly_group_factor(dlysc, curves, "L")
+bgroup
+```
+
+
 
 ```{r}
 ## primary test 
 set.seed(999)
 tmp <- mc_fit_end(yields=yields, lambdas=lambdas, cutoffs=c(4,8), reference="usa", curves=curves,mats=mats, X_trunc=TRUE, 
-                  Xt_smooth=FALSE, smoother="bs", knot_count=6)
+                  Xt_smooth=TRUE, smoother="rm", k_count=25, k_pass=2)
 
 x1_synth <- arima.sim(model = list(ar=c(0.9)), 250)
 x2_synth <- arima.sim(model = list(ar=c(-0.9)), 250)
 xt_synth <- cbind(x1_synth, x2_synth)
 
 tmp2 <- mc_fit_exo(yields=yields, lambdas=lambdas, Xt=xt_synth, cutoffs=c(4,8), reference="usa", curves=curves, mats=mats, 
-                   Xt_smooth=TRUE, smoother="ns", knot_count=6)
+                   Xt_smooth=FALSE, smoother="ns", knot_count=6)
+
+plot(tmp$curve$jpn.01Y, type='l', ylim=c(-2,2))
 
 ```
-
 
 ```{r}
 ## testing 
@@ -82,7 +102,6 @@ Ytest <- vecY(yields, curves, mats) # done
 
 blcc_build_Wj
 
-Wtest$X01M
 ```
 
 ```{r}

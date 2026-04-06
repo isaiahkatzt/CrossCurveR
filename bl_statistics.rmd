@@ -1,0 +1,56 @@
+---
+title: "baseline curve statistics"
+author: "Isaiah Katz"
+date: "2026-04-04"
+output: html_document
+---
+
+```{r}
+curve_files <- list(
+  usa = "reconstructed_data/usa-bs.csv",
+  gbr = "reconstructed_data/gbr-bs.csv",
+  jpn = "reconstructed_data/jpn-bs.csv",
+  cad = "reconstructed_data/cad-bs.csv",
+  ger = "reconstructed_data/ger-bs.csv",
+  fra = "reconstructed_data/fra-bs.csv",
+  itl = "reconstructed_data/itl-bs-ib.csv",
+  aus = "reconstructed_data/aus-bs-ib.csv"
+)
+
+curves <- lapply(curve_files, read.csv, stringsAsFactors = FALSE)
+```
+
+```{r}
+summarize_curve <- function(curve_name, curve_data) {
+  tenor_cols <- setdiff(names(curve_data), "time")
+  tenor_data <- lapply(curve_data[tenor_cols], as.numeric)
+
+  curve_stats <- lapply(tenor_cols, function(tenor) {
+    values <- tenor_data[[tenor]]
+
+    data.frame(
+      curve = curve_name,
+      tenor = tenor,
+      mean = mean(values, na.rm = TRUE),
+      min = min(values, na.rm = TRUE),
+      q25 = unname(quantile(values, 0.25, na.rm = TRUE)),
+      median = median(values, na.rm = TRUE),
+      q75 = unname(quantile(values, 0.75, na.rm = TRUE)),
+      max = max(values, na.rm = TRUE),
+      variance = var(values, na.rm = TRUE)
+    )
+  })
+
+  do.call(rbind, curve_stats)
+}
+
+curve_summary_stats <- do.call(
+  rbind,
+  lapply(names(curves), function(curve_name) {
+    summarize_curve(curve_name, curves[[curve_name]])
+  })
+)
+
+row.names(curve_summary_stats) <- NULL
+curve_summary_stats
+```
