@@ -10,27 +10,32 @@ knitr::opts_chunk$set(echo = TRUE)
 
 library(microbenchmark)
 
-source("yield_estimation/bl_cross_estimation.R")
-source("yield_estimation/dly_mcm.R")
+source(here("yield_estimation", "bl_cross_estimation.R"))
+source(here("yield_estimation", "dly_mcm.R"))
 
 ```
 
 ```{r}
-usa <- read.csv("reconstructed_data/usa-bs.csv")
-gbr <- read.csv("reconstructed_data/gbr-bs.csv")
-jpn <- read.csv("reconstructed_data/jpn-bs.csv")
-cad <- read.csv("reconstructed_data/cad-bs.csv")
-ger <- read.csv("reconstructed_data/ger-bs.csv")
-fra <- read.csv("reconstructed_data/fra-bs.csv")
-itl <- read.csv("reconstructed_data/itl-bs-ib.csv")
-aus <- read.csv("reconstructed_data/aus-bs-ib.csv")
+yield_files <- c(
+  usa = "usa-bs.csv",
+  gbr = "gbr-bs.csv",
+  jpn = "jpn-bs.csv",
+  cad = "cad-bs.csv",
+  ger = "ger-bs.csv",
+  fra = "fra-bs.csv",
+  itl = "itl-bs-ib.csv",
+  aus = "aus-bs-ib.csv"
+)
 
+yields <- lapply(yield_files, function(f) {
+  read.csv(here("reconstructed_data", f))
+})
 
-yields <- list(usa[1:250, ], gbr[1:250, ], jpn[1:250, ], cad[1:250, ], ger[1:250, ], fra[1:250, ], itl[1:250, ], aus[1:250,])
-curves <- c("usa", "gbr", "jpn", "cad", "ger", "fra", "itl", "aus")
+yields <- list(yields$usa[251:500, ], yields$gbr[251:500, ], 
+               yields$jpn[251:500, ], yields$cad[251:500, ]) #, ger[1:250, ], fra[1:250, ], itl[1:250, ], aus[1:250,])
+curves <- c("usa", "gbr", "jpn", "cad")# , "ger", "fra", "itl", "aus")
 mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360) 
-lambdas <- seq(0.01, 0.1, by = 0.001)
-
+lambdas <- seq(0.01, 0.1, by = 0.005)
 ```
 
 ```{r}
@@ -49,24 +54,138 @@ bgroup <- dly_group_factor(dlysc, curves, "L")
 bgroup
 ```
 
-
-
 ```{r}
 ## primary test 
 set.seed(999)
 tmp <- mc_fit_end(yields=yields, lambdas=lambdas, cutoffs=c(4,8), reference="usa", curves=curves,mats=mats, X_trunc=TRUE, 
-                  Xt_smooth=TRUE, smoother="rm", k_count=25, k_pass=2)
+                  Xt_smooth=TRUE, smoother="rm", COV_TEST = FALSE)
 
-x1_synth <- arima.sim(model = list(ar=c(0.9)), 250)
+tmp_marginal <- mc_fit_end(yields=yields, lambdas=lambdas, cutoffs=c(4,8), reference="usa", curves=curves,mats=mats, X_trunc=TRUE, 
+                  Xt_smooth=TRUE, smoother="rm", COV_TEST = TRUE)
+
+
+set.seed(998)
+tmp0 <- mc_fit_end(yields=yields, lambdas=lambdas, cutoffs=c(4,8), reference="usa", curves=curves, mats=mats, X_trunc=TRUE, 
+                  Xt_smooth=TRUE, smoother="rm", k_count=25, k_pass=2, COV_TEST = FALSE)
+
+x1_synth <- arima.sim(model = list(ar=c(0.1)), 250)
 x2_synth <- arima.sim(model = list(ar=c(-0.9)), 250)
 xt_synth <- cbind(x1_synth, x2_synth)
 
 tmp2 <- mc_fit_exo(yields=yields, lambdas=lambdas, Xt=xt_synth, cutoffs=c(4,8), reference="usa", curves=curves, mats=mats, 
                    Xt_smooth=FALSE, smoother="ns", knot_count=6)
 
-plot(tmp$curve$jpn.01Y, type='l', ylim=c(-2,2))
+plot(tmp$curve$usa.01Y, type = 'l', col = 'blue', ylim=c(0,8))
+lines(tmp0$curve$usa.01Y, col = 'red')
+
+plot(tmp$curve$usa.01M, type = 'l', col = 'blue', ylim=c(0,8))
+lines(usa$X01M, col = 'red')
+
+
+plot(tmp$Xt[, 1], type = 'l')
+lines(tmp$Xt[, 2], col='red')
+lines(tmp$Xt[, 3], col='blue')
+
+usa_10Y_dns_error <- usa$X01Y[1:250] - tmp$curve$usa.01Y[1:250]
+gbr_10Y_dns_error <- cad$X01Y[1:250] - tmp$curve$cad.01Y[1:250]
+
+wt_usa_gbr <- cbind(usa_10Y_dns_error, gbr_10Y_dns_error)
+cor(wt_usa_gbr)
+
+cc_cov <- tmp$BS0$X10Y$S0
+cov2cor(cc_cov)
+
+cond_full <- lapply(tmp$sigma_JT$jSigma$X10Y, function(x) rcond(cov2cor(x)))
+plot(unlist(cond_full))
+
+usa.marginal <- usa$X10Y[1:250] - tmp_marginal$curve$usa.10Y
+jpn.marginal <- jpn$X10Y[1:250] - tmp_marginal$curve$jpn.10Y
+gbr.marginal <- gbr$X10Y[1:250] - tmp_marginal$curve$gbr.10Y
+cad.marginal <- cad$X10Y[1:250] - tmp_marginal$curve$cad.10Y
+
+cor(cbind(usa.marginal, gbr.marginal, jpn.marginal, cad.marginal))
 
 ```
+
+```{r}
+cov2cor(tmp$BS0$X10Y$B %*% tmp$Xt[1, ] %*% t(tmp$Xt[1, ]) %*% t(tmp$BS0$X10Y$B))
+
+score_b <- lapply(seq(1:250), function(x) tmp$BS0$X10Y$B %*% tmp$Xt[x, ])
+score_b_full <- do.call(cbind, score_b)
+plot(score_b_full[1, ], type = 'l', ylim=c(-0.2, 0.2))
+lines(score_b_full[2, ], col='blue')
+lines(score_b_full[3, ], col='red')
+lines(score_b_full[4, ], col='green')
+
+quad_b <- lapply(seq(1:250), function(x) tmp$BS0$X10Y$B %*% tmp$Xt[x, ] %*% t(tmp$Xt[x, ]) %*% t(tmp$BS0$X10Y$B))
+det_b <- lapply(quad_b, function(x) det(x))
+trace_b <- lapply(quad_b, function(x) sum(diag(x)))
+plot(unlist(trace_b), type = 'l')
+
+psi <- tmp$BS0$X10Y$S0
+cov2cor(psi)
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(ggplot2)
+
+plot_matrix_sequence_heatmap <- function(mat_list, use_upper_only = TRUE) {
+  stopifnot(is.list(mat_list))
+  stopifnot(length(mat_list) > 0)
+
+  # use list names as time labels if available; otherwise use indices
+  time_labels <- names(mat_list)
+  if (is.null(time_labels) || all(time_labels == "")) {
+    time_labels <- seq_along(mat_list)
+  }
+
+  long_df <- map2_dfr(mat_list, time_labels, function(M, tt) {
+    M <- as.matrix(M)
+
+    df <- as.data.frame(as.table(M), stringsAsFactors = FALSE)
+    colnames(df) <- c("row", "col", "value")
+    df$time <- tt
+
+    if (use_upper_only) {
+      rn <- rownames(M)
+      cn <- colnames(M)
+
+      row_idx <- match(df$row, rn)
+      col_idx <- match(df$col, cn)
+
+      df <- df[row_idx <= col_idx, ]
+    }
+
+    df
+  })
+
+  long_df <- long_df %>%
+    mutate(
+      pair = paste(row, col, sep = "-"),
+      time = factor(time, levels = unique(time_labels)),
+      pair = factor(pair, levels = unique(pair))
+    )
+
+  ggplot(long_df, aes(x = time, y = pair, fill = value)) +
+    geom_tile() +
+    scale_fill_gradient2(midpoint = 0) +
+    labs(x = "Time", y = "Matrix entry", fill = "Value") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+      panel.grid = element_blank()
+    )
+}
+
+tmp$jSigma$X10Y[[200]]
+```
+
+
+
 
 ```{r}
 ## testing 

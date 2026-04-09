@@ -1,0 +1,61 @@
+---
+title: "cr_synthetic_eval"
+author: "Isaiah Katz"
+date: "2026-04-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+source("yield_estimation/cr_eval.R")
+```
+
+```{r}
+## synthetic data evaluation: gaussian covariates 
+set.seed(999)
+P <- 3
+Q <- 2
+N <- 500
+  
+B_true <- matrix(c(0.7, -0.4, 0.2,  0.5, -0.6,  0.3), nrow = P, byrow = TRUE)
+S0_true <- matrix(c(1.0, 0.2, 0.1, 0.2, 0.8, 0.15, 0.1, 0.15, 0.9), nrow = P, byrow = TRUE)
+Sigma_hat <- cr_build(fit, sim$X, return_array = TRUE)
+  
+sim <- cr_synthetic(N = N, B = B_true, S0 = S0_true, seed = 101)
+  
+fit <- zero_mean_covreg_em(W = sim$W, X = sim$X, init = "adaptive", max_iter = 500,
+    tol = 1e-8, verbose = FALSE) 
+
+sigma <- cr_build(sim)
+sigma_hat <- cr_build(fit, X_new = sim$X)
+
+cov_array_mse(sigma_hat, sigma)
+```
+
+```{r}
+## synthetic data evaluation: stationary AR covariates 
+N <- 500
+Q_ar <- 2
+
+phi   <- c(0.85, 0.60)
+sigma <- c(0.4, 0.7)
+
+X_ar <- sapply(1:Q_ar, function(j) arima.sim(n = N, model = list(ar = phi[j]), sd = sigma[j]))
+X_ar <- as.matrix(X_ar)
+X <- X_ar
+
+stationary_sim <- cr_synthetic(N = N, B = B_true, S0 = S0_true, X = X, seed = 123)
+stationary_fit <- zero_mean_covreg_em(W = stationary_sim$W, X = stationary_sim$X, init = "adaptive", max_iter = 500,
+    tol = 1e-8, verbose = FALSE) 
+
+sigma_stationary <- cr_build(stationary_sim)
+sigma_hat_stationary <- cr_build(stationary_fit, X_new = X)
+
+cov_array_mse(sigma_stationary, sigma_hat_stationary)
+
+stationary_fit$S0 - S0_true
+```
+
