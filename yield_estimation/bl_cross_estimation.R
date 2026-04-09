@@ -1,13 +1,27 @@
-source("yield_estimation/curve_reformat.R")
-source("yield_estimation/bl_single_curve.R")
-source("yield_estimation/bl_feature_extract.R")
-source("yield_estimation/cr_core_estim.R")
-source("yield_estimation/matrix_helpers.R")
-source("yield_estimation/bl_normalize.R")
-
 #############################################
 #         Full Cross-Curve Estimation       #
 #############################################
+
+blce_smooth_Xt <- function(Xt, ytime, smoother = c("ns", "bs", "rm", "hp", "henderson"),
+                           knot_count = 5, k_count = 9, k_pass = 3,
+                           hp_lambda = 1600, henderson_k = 13) {
+  smoother <- match.arg(smoother)
+  
+  if (smoother == "rm") {
+    return(fe_xt_rm(Xt, k_count, k_pass))
+  }
+  
+  if (smoother == "hp") {
+    return(fe_xt_hp(Xt, lambda = hp_lambda))
+  }
+  
+  if (smoother == "henderson") {
+    return(fe_xt_henderson(Xt, k = henderson_k))
+  }
+  
+  kps <- fe_kp_quantile(time = ytime, knot_count = knot_count)
+  apply(Xt, 2, fe_xt_spline, time = ytime, spline_fit = smoother, knot_points = kps)
+}
 
 blce_rescale_yield <- function(normalized, sqrt_sigma_t, P, ptype = c("tenor", "curve"), time, curves, mats) {
   ptype = match.arg(ptype)
@@ -41,9 +55,10 @@ blce_rescale_yield <- function(normalized, sqrt_sigma_t, P, ptype = c("tenor", "
 
 mc_fit_end <- function(yields, lambdas, cutoffs, reference, 
                        ECM_estim="ML", ECM_type="eigen", ECM_alpha=0.1, X_normalize=TRUE, X_trunc=FALSE,
-                       CR_algo=zero_mean_covreg, CR_init="adaptive", Xt_smooth=FALSE, smoother=c("ns", "bs", "rm"), k_count=9, k_pass=3,
+                       CR_algo=zero_mean_covreg_em, CR_init="adaptive", Xt_smooth=FALSE, smoother=c("ns", "bs", "rm", "hp", "henderson"), 
+                       knot_count=5, k_count=9, k_pass=3, hp_lambda=1600, henderson_k=13,
                        CR_maxiter=1000, CR_tol=1e-8, CR_Binit=NULL, CR_S0init=NULL, CR_verb=FALSE, CR_term=TRUE, 
-                       curves, mats) {
+                       curves, mats, COV_TEST = FALSE) {
   ## full endogenous covariate fit 
   
   ## build maturity x tenor strings 
@@ -73,20 +88,17 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
   phi_hat <- bln_phi_hat(bl_yields$phi, mds) 
   W <- blcc_build_Wj(bl_yields$nsfit, mats) 
   H <- bdiag(bl_yields$H) 
-
+  
   ## feature extraction 
   cc_ci_features <- blcc_cointegration(blsc_list=bl_yields, curves=curves, reference=reference, 
                                        estim=ECM_estim, type=ECM_type, alpha=ECM_alpha, normalize=X_normalize)
   Xt <- blcc_build_Xt(cc_ci_features$cc_cspread, cc_ci_features$cc_ecm, trunc=X_trunc) 
-  
+
   if (Xt_smooth){
-    if (smoother == "rm"){
-      Xt <- fe_xt_rm(Xt, k_count, k_pass)
-    }
-    else{
-      kps <- fe_kp_quantile(time=ytime, knot_count=knot_count)
-      Xt <- apply(Xt, 2, fe_xt_spline, time=ytime, spline_fit=smoother, knot_points=kps)
-    }
+    Xt <- blce_smooth_Xt(
+      Xt = Xt, ytime = ytime, smoother = smoother, knot_count = knot_count,
+      k_count = k_count, k_pass = k_pass, hp_lambda = hp_lambda, henderson_k = henderson_k
+    )
   }
   
   ## covariance regression and sigma estimation 
@@ -96,8 +108,18 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
   cc_Sigma <- tSigma_optim(BS0=cc_BS0_feature, X=Xt)
   
   full_sigma_t <- sqrt_inv_build(cc_Sigma$tSigma)
+  
   sqrt_sigma_t <- full_sigma_t$sqrt
   sqrt_inv_sigma_t <- full_sigma_t$inverse
+  
+  if (COV_TEST){
+    print("covariance testing mode")
+    idm <- blmc_identity_sigma(curves, mats) 
+    N <- nrow(Xt)
+    full_sigma_t <- lapply(seq(1:N), function(n) idm)
+    sqrt_sigma_t <- lapply(seq(1:N), function(n) idm)
+    sqrt_inv_sigma_t <- lapply(seq(1:N), function(n) idm)
+  }
   
   ## breve components 
   yb <- bln_YB(pY[['py']], sqrt_inv_sigma_t) 
@@ -130,7 +152,8 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
 }
 
 mc_fit_exo <- function(yields, lambdas, cutoffs, reference, Xt, X_normalize=TRUE,
-                       CR_algo=zero_mean_covreg, CR_init="adaptive", Xt_smooth=FALSE, smoother=c("ns", "bs"), knot_count=5,
+                       CR_algo=zero_mean_covreg, CR_init="adaptive", Xt_smooth=FALSE, smoother=c("ns", "bs", "rm", "hp", "henderson"),
+                       knot_count=5, k_count=9, k_pass=3, hp_lambda=1600, henderson_k=13,
                        CR_maxiter=1000, CR_tol=1e-8, CR_Binit=NULL, CR_S0init=NULL, CR_verb=FALSE, CR_term=TRUE, 
                        curves, mats) {
   ## full exogenous covariate fit 
@@ -164,8 +187,10 @@ mc_fit_exo <- function(yields, lambdas, cutoffs, reference, Xt, X_normalize=TRUE
   H <- bdiag(bl_yields$H) 
   
   if (Xt_smooth){
-    kps <- fe_kp_quantile(time=ytime, knot_count=knot_count)
-    Xt <- apply(Xt, 2, fe_xt_spline, time=ytime, spline_fit=smoother, knot_points=kps)
+    Xt <- blce_smooth_Xt(
+      Xt = Xt, ytime = ytime, smoother = smoother, knot_count = knot_count,
+      k_count = k_count, k_pass = k_pass, hp_lambda = hp_lambda, henderson_k = henderson_k
+    )
   }
   
   ## covariance regression and sigma estimation 

@@ -15,6 +15,45 @@ test_that("blce_rescale_yield returns correctly labeled tenor and curve views", 
   expect_true(any(grepl("\\.", colnames(tenor_view)[-1])))
 })
 
+test_that("blce_smooth_Xt dispatches to spline, RM, HP, and Henderson smoothers", {
+  Xt <- matrix(seq_len(20), ncol = 2)
+  ytime <- fixture_time
+  
+  ns_result <- with_temp_bindings(
+    list(
+      fe_kp_quantile = function(...) c(1, 2, 3),
+      fe_xt_spline = function(col, time, spline_fit, knot_points, ...) rep(if (spline_fit == "ns") 11 else 22, length(col))
+    ),
+    blce_smooth_Xt(Xt, ytime, smoother = "ns", knot_count = 3)
+  )
+  
+  rm_result <- with_temp_bindings(
+    list(
+      fe_xt_rm = function(X, k, passes) matrix(33, nrow = nrow(X), ncol = ncol(X))
+    ),
+    blce_smooth_Xt(Xt, ytime, smoother = "rm", k_count = 7, k_pass = 2)
+  )
+  
+  hp_result <- with_temp_bindings(
+    list(
+      fe_xt_hp = function(X, lambda) matrix(lambda, nrow = nrow(X), ncol = ncol(X))
+    ),
+    blce_smooth_Xt(Xt, ytime, smoother = "hp", hp_lambda = 1600)
+  )
+  
+  henderson_result <- with_temp_bindings(
+    list(
+      fe_xt_henderson = function(X, k) matrix(k, nrow = nrow(X), ncol = ncol(X))
+    ),
+    blce_smooth_Xt(Xt, ytime, smoother = "henderson", henderson_k = 13)
+  )
+  
+  expect_true(all(ns_result == 11))
+  expect_true(all(rm_result == 33))
+  expect_true(all(hp_result == 1600))
+  expect_true(all(henderson_result == 13))
+})
+
 test_that("mc_fit_end assembles the expected top-level output structure", {
   yields <- make_pair_yields()
   fake_time <- yields$usa$time

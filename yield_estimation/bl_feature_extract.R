@@ -1,6 +1,3 @@
-source("packages.R")
-source("yield_estimation/curve_reformat.R")
-
  #############################################
 #            Feature Extraction             #
 #############################################
@@ -24,6 +21,14 @@ blmc_VAR <- function(blsc_list, reference, curves) {
     cross_curve_beta[[m]] <- cc_beta
   }
   return(cross_curve_beta)
+}
+
+blmc_identity_sigma <- function(curves, mats) {
+  ## test function for methodological verification  
+  M = length(mats) 
+  D = length(curves) 
+  identity_sigma <- diag(M * D)
+  return(identity_sigma) 
 }
 
 blmc_ECM <- function(cc_betas, estim = "ML", type = "eigen", alpha = 0.1) {
@@ -103,12 +108,13 @@ blcc_build_Wj <- function(curve_nsfit, mats){
   return(Wj = wj_full)
 }
 
-blcc_fe <- function(Xt, Wt, mats, covreg=zero_mean_covreg,
+blcc_fe <- function(Xt, Wt, mats, covreg=zero_mean_covreg_em,
                     init = "adaptive", max_iter = 1000, tol = 1e-10, S0 = NULL, B = NULL, verb = FALSE, term = FALSE) {
   ## baseline cross-curve feature extraction
   BS0_list <- lapply(Wt, function(Wj) {
     covreg(W=Wj, X=Xt, init = init, max_iter = max_iter, tol = tol, S0 = S0, B = B, 
-           verb = verb, term = term)
+           ridge_S0=1e-8, ridge_X = 1e-10, check_every=1, use_loglik=TRUE, verbose=FALSE, store_path=TRUE)
+           #verb = verb, term = term)
   })
   return(BS0_list) 
 }
@@ -193,5 +199,71 @@ fe_xt_rm <- function(X, k = 21, passes = 2) {
   })
 }
 
+fe_xt_hp <- function(X, lambda = 1600) {
+  if (!is.numeric(lambda) || length(lambda) != 1 || is.na(lambda) || lambda < 0) {
+    stop("lambda must be a non-negative numeric scalar")
+  }
+  
+  vector_input <- is.null(dim(X))
+  X_mat <- if (vector_input) matrix(X, ncol = 1) else as.matrix(X)
+  storage.mode(X_mat) <- "double"
+  
+  n <- nrow(X_mat)
+  if (n < 3 || lambda == 0) {
+    xt_smooth <- X_mat
+  } else {
+    D <- diff(diag(n), differences = 2)
+    hp_matrix <- diag(n) + lambda * crossprod(D)
+    xt_smooth <- solve(hp_matrix, X_mat)
+  }
+  
+  dimnames(xt_smooth) <- dimnames(X_mat)
+  
+  if (vector_input) {
+    return(as.vector(xt_smooth))
+  }
+  return(xt_smooth)
+}
 
-
+fe_xt_henderson <- function(X, k = 13) {
+  if (!is.numeric(k) || length(k) != 1 || is.na(k) || k <= 0 || k %% 2 == 0 || k != as.integer(k)) {
+    stop("k must be a positive odd integer")
+  }
+  
+  vector_input <- is.null(dim(X))
+  X_mat <- if (vector_input) matrix(X, ncol = 1) else as.matrix(X)
+  storage.mode(X_mat) <- "double"
+  
+  h <- (k - 1) %/% 2
+  offsets <- -h:h
+  m <- h
+  weights <- 315 *
+    ((m + 1)^2 - offsets^2) *
+    ((m + 2)^2 - offsets^2) *
+    ((m + 3)^2 - offsets^2) *
+    (3 * (m + 2)^2 - 11 * offsets^2 - 16) /
+    (
+      8 * (m + 2) *
+        ((m + 2)^2 - 1) *
+        (4 * (m + 2)^2 - 1) *
+        (4 * (m + 2)^2 - 9) *
+        (4 * (m + 2)^2 - 25)
+    )
+  
+  n <- nrow(X_mat)
+  xt_smooth <- matrix(NA_real_, nrow = n, ncol = ncol(X_mat), dimnames = dimnames(X_mat))
+  
+  for (j in seq_len(ncol(X_mat))) {
+    for (i in seq_len(n)) {
+      idx <- max(1, i - h):min(n, i + h)
+      weight_idx <- idx - i + h + 1
+      local_weights <- weights[weight_idx]
+      xt_smooth[i, j] <- sum(X_mat[idx, j] * local_weights) / sum(local_weights)
+    }
+  }
+  
+  if (vector_input) {
+    return(as.vector(xt_smooth))
+  }
+  return(xt_smooth)
+}

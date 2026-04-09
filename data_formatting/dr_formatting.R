@@ -1,8 +1,3 @@
-source("packages.R")
-source("core_formatting.R")
-source("data_formatting/dr_spline.R") 
-source("data_formatting/dr_static_ns.R") 
-
 #############################################
 #           Input Data Formatting           #
 #############################################
@@ -152,4 +147,3 @@ dr_build_curve <- function(data, nmats=NULL, tkey="time", build=c("spline", "log
   
   return(int_df) 
 }
-

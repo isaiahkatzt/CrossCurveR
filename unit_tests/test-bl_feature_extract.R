@@ -138,3 +138,33 @@ test_that("time smoothers build knot points, spline bases, and rolling averages"
   expect_equal(length(bs_smooth), length(fixture_time))
   expect_equal(dim(rm_smooth), c(length(fixture_time), 2))
 })
+
+test_that("HP smoother returns same-shaped smoothed features", {
+  xt <- sin(seq(0, 4 * pi, length.out = length(fixture_time))) + rep(c(-0.2, 0.2), length.out = length(fixture_time))
+  X <- cbind(a = xt, b = xt + seq_along(xt) / 10)
+  
+  hp_smooth <- fe_xt_hp(X, lambda = 1600)
+  hp_vector <- fe_xt_hp(xt, lambda = 1600)
+  
+  expect_equal(dim(hp_smooth), dim(X))
+  expect_equal(colnames(hp_smooth), colnames(X))
+  expect_equal(length(hp_vector), length(xt))
+  expect_lt(sum(diff(hp_smooth[, "a"], differences = 2)^2), sum(diff(X[, "a"], differences = 2)^2))
+  expect_error(fe_xt_hp(X, lambda = -1), "lambda must be a non-negative numeric scalar")
+})
+
+test_that("Henderson smoother returns same-shaped smoothed features", {
+  xt <- sin(seq(0, 4 * pi, length.out = length(fixture_time))) + rep(c(-0.2, 0.2), length.out = length(fixture_time))
+  X <- cbind(a = xt, b = xt + seq_along(xt) / 10)
+  
+  henderson_smooth <- fe_xt_henderson(X, k = 13)
+  henderson_vector <- fe_xt_henderson(xt, k = 13)
+  
+  expect_equal(dim(henderson_smooth), dim(X))
+  expect_equal(colnames(henderson_smooth), colnames(X))
+  expect_equal(length(henderson_vector), length(xt))
+  expect_lt(sum(diff(henderson_smooth[, "a"], differences = 2)^2), sum(diff(X[, "a"], differences = 2)^2))
+  expect_error(fe_xt_henderson(X, k = 12), "k must be a positive odd integer")
+  expect_error(fe_xt_henderson(X, k = 0), "k must be a positive odd integer")
+  expect_error(fe_xt_henderson(X, k = c(9, 13)), "k must be a positive odd integer")
+})

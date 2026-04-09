@@ -1,5 +1,3 @@
-source("core_formatting.R")
-
 #############################################
 #      Initial Yield Curve Formatting       #
 #############################################
@@ -8,19 +6,6 @@ full_matrix_yield <- function(yields, curves) {
   setNames(lapply(yields, function(yield) {
     as.matrix(yield[-1])}
     ), curves)
-}
-
-numeric_to_matname <- function(numeric_mat) {
-  ## convert numeric maturities to character string 
-  if (numeric_mat < 12) {
-    prefix <- ifelse(numeric_mat < 10, "0", "")
-    colname <- paste0(prefix, as.character(numeric_mat), "M")
-  } else {
-    numeric_mat_month <- numeric_mat / 12
-    prefix <- ifelse(numeric_mat_month < 10, "0", "")
-    colname <- paste0(prefix, as.character(numeric_mat_month), "Y")
-  }
-  return(colname)
 }
 
 vecY <- function(yields, curves, mats, ts=TRUE) {
@@ -66,7 +51,6 @@ cf_curve_cut <- function(vecY, curves, mats) {
   names(cut_curve) <- curves
   return(cut_curve) 
 }
-
 
 cf_phi_cut <- function(vphi, curves, mats) {
   M <- length(mats) 

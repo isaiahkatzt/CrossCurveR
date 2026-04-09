@@ -1,7 +1,3 @@
-source("packages.R")
-source("yield_estimation/curve_reformat.R")
-source("yield_estimation/bl_single_curve.R")
-
 #############################################
 #     Diebold-Li-Yue Multi-Curve Model      #
 #############################################
@@ -40,4 +36,3 @@ dly_group_factor <- function(sc_full, curves, latent=c("L", "S")) {
   factor_draw <- do.call(cbind, lapply(curve_beta, function(d) d[, latent]))
   return(factor_draw) 
 }
-

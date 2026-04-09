@@ -1,5 +1,3 @@
-source("packages.R")
-
 #############################################
 #      Baseline Single Curve Estimation     #
 #############################################
@@ -30,7 +28,7 @@ l2_loss_lambda <- function(lambda_grid, daily_yield, mats) {
   loss_row
 }
 
-lambda_grid_search <- function(lambda_grid, yields, mat, loss = l2_loss_lambda) {  
+lambda_grid_search <- function(lambda_grid, yields, mats, loss = l2_loss_lambda) {  
   ## fast search lambda grid 
   yields <- as.matrix(yields[, -1, drop = FALSE])  
   N <- nrow(yields)
@@ -190,4 +188,3 @@ sc_fit <- function(yields, mats, type = c("nelson", "svensson", "daily"), ts=TRU
   
   return(list(yields = model_yields, betas = model_betas, dynamic = beta_dynamic))
 }
-

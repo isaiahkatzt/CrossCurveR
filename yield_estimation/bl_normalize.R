@@ -1,6 +1,3 @@
-source("packages.R")
-source("yield_estimation/curve_reformat.R")
-
 #############################################
 #     Normalized Component Construction     #
 #############################################

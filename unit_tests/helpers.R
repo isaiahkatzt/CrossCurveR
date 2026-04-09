@@ -14,9 +14,7 @@ on.exit(setwd(old_wd), add = TRUE)
 source("packages.R")
 
 source_project_file <- function(path) {
-  lines <- readLines(path, warn = FALSE)
-  lines <- lines[!grepl("^source\\(", trimws(lines))]
-  eval(parse(text = lines), envir = .GlobalEnv)
+  sys.source(path, envir = .GlobalEnv)
 }
 
 source_project_file(file.path(repo_root, "core_formatting.R"))
@@ -35,10 +33,6 @@ tol <- 1e-6
 fixture_mats <- c(1, 3, 6, 12, 24, 60)
 fixture_curves <- c("usa", "gbr")
 fixture_time <- as.Date("2020-01-01") + 0:19
-
-# Work around the current lambda_grid_search implementation, which
-# references a global `mats` object instead of its `mat` argument.
-assign("mats", fixture_mats, envir = .GlobalEnv)
 
 make_ns_curve_df <- function(curve_shift = 0, lambda = 0.35, mats = fixture_mats, time = fixture_time) {
   idx <- seq_along(time) - 1
