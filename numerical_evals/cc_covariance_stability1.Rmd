@@ -31,33 +31,41 @@ load_crosscurveR()
 ```
 
 ```{r}
-yield_files <- c(
+curve_files <- list(
   usa = "usa-bs.csv",
   gbr = "gbr-bs.csv",
   jpn = "jpn-bs.csv",
   cad = "cad-bs.csv",
   ger = "ger-bs.csv",
-  fra = "fra-bs.csv"
+  fra = "fra-bs.csv",
+  itl = "itl-bs-ib.csv",
+  aus = "aus-bs-ib.csv"
 )
 
-yields <- lapply(yield_files, function(f) {
-  read.csv(here::here("reconstructed_data", f))
+yields <- lapply(curve_files, function(x) {
+  read.csv(here("reconstructed_data", x), stringsAsFactors = FALSE)
 })
 
-trunc_yields <- lapply(yields, function(x) x[251:500, ])
-curves <- c("usa", "gbr", "jpn", "cad", "ger", "fra")
+yields <- lapply(yields, function(x) {
+ x %>% dplyr::filter(as.Date(time) >= as.Date("2010-01-01") & 
+                       as.Date(time) <= as.Date("2020-12-31"))
+})
+
+
+curves <- c("usa", "gbr", "jpn", "cad", "ger", "fra", "itl", "aus")
 mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360) 
 mat_str <- paste0("X", unlist(lapply(mats, numeric_to_matname)))
 
+rm(curve_files)
 ```
 
 ```{r}
 ## single curve fitting (baseline)
-marginal_DNS <- lapply(trunc_yields, function(x) sc_fit(yields = x, mats = mats, type = c("nelson"), ts = FALSE))
+marginal_DNS <- lapply(yields, function(x) sc_fit(yields = x, mats = mats, type = c("nelson"), lambdas = c(0.0609), ts = FALSE))
 
 ## NS model residuals 
 sc_residuals <- setNames(lapply(seq(1:length(yields)), function(x) {
-  marginal_DNS[[x]][['yields']] - trunc_yields[[x]][, 2:11]
+  marginal_DNS[[x]][['yields']] - yields[[x]][, 2:11]
   }), curves)
 
 ## tenor ordering 
@@ -71,7 +79,8 @@ wt_list <- setNames(lapply(mat_str, function(tenor) {
 
 ```{r}
 ## rolling window correlation matrix construction  
-build_rolling_corr_array <- function(wt_df, width = 60, min_obs = NULL, align = "right") {
+build_rolling_corr_array <- function(wt_df, width = 60, min_obs = NULL,
+                                     align = "right", overlap = width - 1) {
   wt_mat <- as.matrix(wt_df)
   if (is.null(min_obs)) {
     min_obs <- width
@@ -84,10 +93,17 @@ build_rolling_corr_array <- function(wt_df, width = 60, min_obs = NULL, align = 
   if (min_obs < 2 || min_obs > width) {
     stop("min_obs must satisfy 2 <= min_obs <= width.")
   }
+
+  if (length(overlap) != 1 || !is.numeric(overlap) || overlap < 0 ||
+      overlap >= width || overlap %% 1 != 0) {
+    stop("overlap must be an integer satisfying 0 <= overlap < width.")
+  }
   
   n <- nrow(wt_mat)
   corr_path <- vector("list", n)
   curve_names <- colnames(wt_mat)
+  step_size <- width - overlap
+  last_eval_i <- NULL
   
   for (i in seq_len(n)) {
     if (align == "right") {
@@ -103,10 +119,13 @@ build_rolling_corr_array <- function(wt_df, width = 60, min_obs = NULL, align = 
     
     if (length(idx) < min_obs) {
       corr_path[[i]] <- NA
+    } else if (!is.null(last_eval_i) && (i - last_eval_i) < step_size) {
+      corr_path[[i]] <- NA
     } else {
       corr_path[[i]] <- stats::cor(wt_mat[idx, , drop = FALSE], use = "pairwise.complete.obs")
       rownames(corr_path[[i]]) <- curve_names
       colnames(corr_path[[i]]) <- curve_names
+      last_eval_i <- i
     }
   }
   
@@ -114,8 +133,11 @@ build_rolling_corr_array <- function(wt_df, width = 60, min_obs = NULL, align = 
 }
 
 ## visualization formatting 
-rolling_corr_long <- function(wt_df, time_index, width = 60, min_obs = NULL, upper_only = TRUE) {
-  corr_path <- build_rolling_corr_array(wt_df = wt_df, width = width, min_obs = min_obs)
+rolling_corr_long <- function(wt_df, time_index, width = 60, min_obs = NULL,
+                              upper_only = TRUE, overlap = width - 1) {
+  corr_path <- build_rolling_corr_array(
+    wt_df = wt_df, width = width, min_obs = min_obs, overlap = overlap
+  )
   
   curve_names <- colnames(wt_df)
   p <- length(curve_names)
@@ -162,11 +184,12 @@ rolling_corr_long <- function(wt_df, time_index, width = 60, min_obs = NULL, upp
 }
 
 plot_rolling_corr_heatmap <- function(wt_df, time_index, width = 60, min_obs = NULL,
-                                      upper_only = TRUE, title = NULL) {
+                                      upper_only = TRUE, title = NULL,
+                                      overlap = width - 1) {
   corr_long <- rolling_corr_long(
     wt_df = wt_df, time_index = time_index,
     width = width, min_obs = min_obs,
-    upper_only = upper_only
+    upper_only = upper_only, overlap = overlap
   )
   
   ggplot2::ggplot(corr_long, ggplot2::aes(x = time, y = pair, fill = correlation)) +
@@ -191,14 +214,16 @@ plot_rolling_corr_heatmap <- function(wt_df, time_index, width = 60, min_obs = N
     )
 }
 
-plot_wt_correlations <- function(wt_list, time_index, width = 60, tenors = names(wt_list)) {
+plot_wt_correlations <- function(wt_list, time_index, width = 60,
+                                 tenors = names(wt_list), overlap = width - 1) {
   stats::setNames(
     lapply(tenors, function(tenor_name) {
       plot_rolling_corr_heatmap(
         wt_df = wt_list[[tenor_name]],
         time_index = time_index,
         width = width,
-        title = paste("Rolling cross-curve correlations:", tenor_name)
+        title = paste("Rolling cross-curve correlations:", tenor_name),
+        overlap = overlap
       )
     }),
     return(tenors)
@@ -208,41 +233,96 @@ plot_wt_correlations <- function(wt_list, time_index, width = 60, tenors = names
 
 ```{r}
 ## individual plotting 
-time_index <- seq(1:length(trunc_yields[[1]]$time))
+time_index <- seq(1:length(yields[[1]]$time))
 
 plot_rolling_corr_heatmap(
-  wt_df = wt_list$wt_X01M,
+  wt_df = wt_list$wt_X30Y,
   time_index = time_index,
   width = 50,
-  title = "50-day rolling cross-curve correlations for X01M tenor"
+  title = "50-day rolling cross-curve correlations for X360M tenor"
 )
 ```
 
-```{r}
-## group plotting 
-tenor_corr_plots <- plot_wt_correlations(
-  wt_list = wt_list,
-  time_index = time_index,
-  width = 30,
-  tenors = paste0("wt_", mat_str)
-)
-```
 ```{r}
 ## correlation matrix significance testing
-rolling_corrs <- lapply(wt_list, function(x) {
-  corr_arr <- build_rolling_corr_array(x, width = 50)
-  corr_arr <- Filter(function(x) !all(is.na(x)), corr_arr)
-  return(corr_arr) 
-})
+#rolling_corrs <- lapply(wt_list, function(x) {
+#  corr_arr <- build_rolling_corr_array(x, width = 60, overlap = 50)
+#  corr_arr <- Filter(function(x) !all(is.na(x)), corr_arr)
+#  return(corr_arr) 
+#})
 
-## likelihood ratio test
+rcorr1M <- build_rolling_corr_array(wt_list$wt_X01M, width=60, overlap=55)
+rcorr1M <- Filter(function(x) !all(is.na(x)), rcorr1M)
 
-## Bartlett's sphericity test 
+rcorr3M <- build_rolling_corr_array(wt_list$wt_X03M, width=60, overlap=55)
+rcorr3M <- Filter(function(x) !all(is.na(x)), rcorr3M)
+
+rcorr1Y <- build_rolling_corr_array(wt_list$wt_X01Y, width=60, overlap=55) 
+rcorr1Y <- Filter(function(x) ! all(is.na(x)), rcorr1Y)
+
+rcorr10Y <- build_rolling_corr_array(wt_list$wt_X10Y, width=60, overlap=55) 
+rcorr10Y <- Filter(function(x) ! all(is.na(x)), rcorr10Y)
+
+rcorr30Y <- build_rolling_corr_array(wt_list$wt_X30Y, width=60, overlap=55) 
+rcorr30Y <- Filter(function(x) ! all(is.na(x)), rcorr30Y)
+
+```
+
+```{r}
+pairwise_corr_summary <- function(corr_list) {
+  first_mat <- corr_list[[1]]
+  pair_idx <- which(upper.tri(first_mat), arr.ind = TRUE)
+  pair_names <- paste0(rownames(first_mat)[pair_idx[, 1]], "-", colnames(first_mat)[pair_idx[, 2]])
+  
+  pair_paths <- t(vapply(
+    seq_len(nrow(pair_idx)),
+    function(k) {
+      i <- pair_idx[k, 1]
+      j <- pair_idx[k, 2]
+      vapply(corr_list, function(M) M[i, j], numeric(1))
+    },
+    numeric(length(corr_list))
+  ))
+  
+  count_sign_changes <- function(x) {
+    s <- sign(x)
+    s <- s[s != 0]
+    if (length(s) <= 1) return(0L)
+    sum(s[-1] != s[-length(s)])
+  }
+  
+  data.frame(
+    pair = pair_names,
+    mean_abs_corr = rowMeans(abs(pair_paths)),
+    mean_corr = rowMeans(pair_paths),
+    sd_corr = apply(pair_paths, 1, sd),
+    max_corr = apply(pair_paths, 1, max),
+    min_corr = apply(pair_paths, 1, min),
+    frac_positive = rowMeans(pair_paths > 0),
+    sign_changes = apply(pair_paths, 1, count_sign_changes),
+    row.names = NULL
+  )
+}
+
+pairwise_corr_summary(rcorr10Y)
+```
+
+
+```{r}
+## Bartlett's test 
 combo_bartlett <- function(corr_array, width) {
   lapply(corr_array, function(x) psych::cortest.bartlett(x, n = width))
 }
 
-bartlett_vals <- lapply(rolling_corrs, function(x) combo_bartlett(x, width=50))
-bartlett_signif <- unlist(lapply(bartlett_vals$wt_X10Y, function(x) x[2]))
+corr_list <- setNames(list(rcorr1M, rcorr3M, rcorr1Y, rcorr10Y, rcorr30Y), c("X01M", "X03M", "X01Y", "X10Y", "X30Y"))
+
+bartlett_vals <- lapply(corr_list, function(x) combo_bartlett(x, width=60))
+bartlett_p <- lapply(bartlett_vals$X30Y, function(x) x[[2]])
 ```
 
+```{r}
+## correlation cond number 
+corr_condition <- lapply(rolling_corrs, function(x) {
+  unlist(lapply(x, rcond))
+})
+```

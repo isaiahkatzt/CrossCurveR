@@ -1,0 +1,755 @@
+---
+title: "cc_covariance_stability2"
+author: "Isaiah Katz"
+date: "2026-04-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+load_crosscurveR <- function() {
+  project_files <- c(
+    "packages.R",
+    "core_formatting.R",
+    "yield_estimation/curve_reformat.R",
+    "yield_estimation/matrix_helpers.R",
+    "yield_estimation/cr_core_estim.R",
+    "yield_estimation/cr_eval.R",
+    "yield_estimation/bl_single_curve.R",
+    "yield_estimation/bl_feature_extract.R",
+    "yield_estimation/bl_normalize.R",
+    "yield_estimation/bl_cross_estimation.R"
+  )
+  
+  invisible(lapply(project_files, function(path) {
+    sys.source(here::here(path), envir = .GlobalEnv)
+  }))
+}
+
+load_crosscurveR()
+```
+
+```{r}
+curve_files <- list(
+  usa = "usa-bs.csv",
+  gbr = "gbr-bs.csv",
+  jpn = "jpn-bs.csv",
+  cad = "cad-bs.csv",
+  ger = "ger-bs.csv",
+  fra = "fra-bs.csv"
+  #itl = "itl-bs-ib.csv",
+  #aus = "aus-bs-ib.csv"
+)
+
+yields <- lapply(curve_files, function(x) {
+  read.csv(here("reconstructed_data", x), stringsAsFactors = FALSE)
+})
+
+yields <- lapply(yields, function(x) {
+ x %>% dplyr::filter(as.Date(time) >= as.Date("2010-01-01") & 
+                       as.Date(time) <= as.Date("2020-12-31"))
+})
+
+
+curves <- c("usa", "gbr", "jpn", "cad", "ger", "fra")#, "itl", "aus")
+mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360) 
+mat_str <- paste0("X", unlist(lapply(mats, numeric_to_matname)))
+lambdas <- seq(0.01, 0.1, by = 0.01)
+
+rm(curve_files)
+```
+
+```{r}
+## truncated yields: window only 
+years <- 2010:2020
+
+annual_yields <- setNames(lapply(years, function(year) {
+  lapply(yields, function(curve_df) {
+    curve_df %>%
+      dplyr::filter(format(as.Date(time), "%Y") == as.character(year))
+  })
+}), years)
+
+```
+
+```{r}
+fit_seed <- 999
+
+build_curve_panel <- function(yield_list, curves) {
+  out <- data.frame(time = yield_list[[1]]$time)
+
+  for (curve_name in curves) {
+    curve_df <- yield_list[[curve_name]][, -1, drop = FALSE]
+    colnames(curve_df) <- paste0(curve_name, ".", sub("^X", "", colnames(curve_df)))
+    out <- cbind(out, curve_df)
+  }
+
+  out
+}
+
+eval_in_sample_fit <- function(fit_obj, observed_yields, curves, mat_str) {
+  actual_curve <- build_curve_panel(observed_yields, curves)
+  fitted_curve <- fit_obj$curve
+
+  common_cols <- setdiff(intersect(colnames(actual_curve), colnames(fitted_curve)), "time")
+  actual_mat <- as.matrix(actual_curve[, common_cols])
+  fitted_mat <- as.matrix(fitted_curve[, common_cols])
+  resid_mat <- fitted_mat - actual_mat
+
+  overall <- tibble::tibble(
+    rows = nrow(actual_mat),
+    series = ncol(actual_mat),
+    mse = mean(resid_mat^2, na.rm = TRUE),
+    rmse = sqrt(mean(resid_mat^2, na.rm = TRUE)),
+    mae = mean(abs(resid_mat), na.rm = TRUE),
+    mean_bias = mean(resid_mat, na.rm = TRUE),
+    max_abs_err = max(abs(resid_mat), na.rm = TRUE)
+  )
+
+  curve_summary <- purrr::map_dfr(curves, function(curve_name) {
+    cols <- grep(paste0("^", curve_name, "\\."), common_cols, value = TRUE)
+    r <- as.matrix(fitted_curve[, cols] - actual_curve[, cols])
+
+    tibble::tibble(
+      curve = curve_name,
+      mse = mean(r^2, na.rm = TRUE),
+      rmse = sqrt(mean(r^2, na.rm = TRUE)),
+      mae = mean(abs(r), na.rm = TRUE),
+      mean_bias = mean(r, na.rm = TRUE),
+      max_abs_err = max(abs(r), na.rm = TRUE)
+    )
+  }) %>%
+    dplyr::arrange(dplyr::desc(rmse))
+
+  tenor_levels <- sub("^.*\\.", "", common_cols)
+  tenor_order <- sub("^X", "", mat_str)
+
+  tenor_summary <- purrr::map_dfr(tenor_order, function(mat_name) {
+    cols <- common_cols[tenor_levels == mat_name]
+    r <- as.matrix(fitted_curve[, cols] - actual_curve[, cols])
+
+    tibble::tibble(
+      tenor = mat_name,
+      mse = mean(r^2, na.rm = TRUE),
+      rmse = sqrt(mean(r^2, na.rm = TRUE)),
+      mae = mean(abs(r), na.rm = TRUE),
+      mean_bias = mean(r, na.rm = TRUE),
+      max_abs_err = max(abs(r), na.rm = TRUE)
+    )
+  })
+
+  list(overall = overall, curve = curve_summary, tenor = tenor_summary)
+}
+
+print_fit_diagnostics <- function(diag_obj, label) {
+  round_tbl <- function(tbl, id_cols) {
+    out <- tbl
+    num_cols <- setdiff(colnames(out), id_cols)
+    out[num_cols] <- lapply(out[num_cols], round, digits = 6)
+    out
+  }
+
+  cat(label, "\n")
+  print(round_tbl(diag_obj$overall, character(0)))
+  cat("\nCurve RMSE ranking\n")
+  print(round_tbl(diag_obj$curve, "curve"))
+  cat("\nTenor RMSE ranking\n")
+  print(round_tbl(diag_obj$tenor, "tenor"))
+}
+
+compare_covreg_covariances <- function(cc_fit, agg = c("mean", "median")) {
+  agg <- match.arg(agg)
+
+  if (is.null(cc_fit$W) || is.null(cc_fit$sigma_JT$jSigma)) {
+    stop("cc_fit must contain both W and sigma_JT$jSigma. Refit with the updated mc_fit_end().")
+  }
+
+  aggregate_sigma <- function(sigma_list) {
+    sigma_array <- simplify2array(sigma_list)
+
+    if (agg == "mean") {
+      apply(sigma_array, c(1, 2), mean)
+    } else {
+      apply(sigma_array, c(1, 2), median)
+    }
+  }
+
+  tenor_names <- intersect(names(cc_fit$W), names(cc_fit$sigma_JT$jSigma))
+
+  empirical <- setNames(lapply(tenor_names, function(mat_name) {
+    stats::cov(as.matrix(cc_fit$W[[mat_name]]), use = "pairwise.complete.obs")
+  }), tenor_names)
+
+  estimated <- setNames(lapply(tenor_names, function(mat_name) {
+    aggregate_sigma(cc_fit$sigma_JT$jSigma[[mat_name]])
+  }), tenor_names)
+
+  deltas <- setNames(lapply(tenor_names, function(mat_name) {
+    estimated[[mat_name]] - empirical[[mat_name]]
+  }), tenor_names)
+
+  summary <- purrr::map_dfr(tenor_names, function(mat_name) {
+    emp_cov <- empirical[[mat_name]]
+    est_cov <- estimated[[mat_name]]
+    delta_cov <- deltas[[mat_name]]
+    off_diag <- row(emp_cov) != col(emp_cov)
+
+    tibble::tibble(
+      tenor = mat_name,
+      empirical_trace = sum(diag(emp_cov)),
+      estimated_trace = sum(diag(est_cov)),
+      frob_error = norm(delta_cov, type = "F"),
+      mse = mean(delta_cov^2),
+      diag_mae = mean(abs(diag(delta_cov))),
+      offdiag_mae = mean(abs(delta_cov[off_diag])),
+      emp_offdiag_mean = mean(emp_cov[off_diag]),
+      est_offdiag_mean = mean(est_cov[off_diag])
+    )
+  }) %>%
+    dplyr::mutate(maturity = mats[match(tenor, mat_str)]) %>%
+    dplyr::select(maturity, tenor, dplyr::everything()) %>%
+    dplyr::arrange(maturity)
+
+  list(summary = summary, empirical = empirical, estimated = estimated, delta = deltas)
+}
+
+print_covariance_comparison <- function(cov_obj, label) {
+  out <- cov_obj$summary
+  num_cols <- setdiff(colnames(out), c("maturity", "tenor"))
+  out[num_cols] <- lapply(out[num_cols], round, digits = 6)
+
+  cat(label, "\n")
+  print(out)
+}
+
+rebuild_check_phi_path <- function(fit_obj, observed_yields, curves, mats, lambdas, cutoffs) {
+  mat_str_local <- sapply(mats, numeric_to_matname)
+  mds <- as.vector(t(outer(curves, mat_str_local, paste, sep = ".")))
+
+  curve_lambdas <- vapply(observed_yields, function(curve_df) {
+    lambda_grid_search(lambdas, curve_df, mats)
+  }, numeric(1))
+
+  bl_yields <- transpose(setNames(lapply(seq_along(observed_yields), function(i) {
+    bl_single_curve(curve_lambdas[i], observed_yields[[i]], cutoffs, mats)
+  }), curves))
+
+  Y <- vecY(observed_yields, curves, mats)
+  P <- bln_build_P(curves, mats)
+  sqrt_inv_sigma_t <- sqrt_inv_build(fit_obj$sigma_JT$tSigma)$inverse
+
+  phi_hat <- bln_phi_hat(bl_yields$phi, mds)
+  phib <- bln_phi_BT(phi_hat, P, sqrt_inv_sigma_t)
+  phic <- bln_phi_CT(phib, P)
+
+  list(
+    time = as.Date(Y$time),
+    check_phi = cf_phi_cut(phic, curves, mats)
+  )
+}
+
+safe_rcond <- function(mat) {
+  tryCatch(rcond(mat), error = function(e) NA_real_)
+}
+
+summarize_sigma_path <- function(fit_obj, label) {
+  purrr::map_dfr(seq_along(fit_obj$sigma_JT$tSigma), function(i) {
+    sigma_t <- as.matrix(fit_obj$sigma_JT$tSigma[[i]])
+    eig <- eigen((sigma_t + t(sigma_t)) / 2, symmetric = TRUE, only.values = TRUE)$values
+    min_eig <- min(eig)
+    max_eig <- max(eig)
+
+    tibble::tibble(
+      specification = label,
+      time = as.Date(fit_obj$curve$time[i]),
+      sigma_trace = sum(diag(sigma_t)),
+      sigma_min_eig = min_eig,
+      sigma_max_eig = max_eig,
+      sigma_cond = max_eig / max(min_eig, 1e-10)
+    )
+  })
+}
+
+summarize_check_phi_path <- function(check_phi_obj, time_index, curves, label) {
+  purrr::map_dfr(curves, function(curve_name) {
+    purrr::map_dfr(seq_along(time_index), function(i) {
+      phi_t <- check_phi_obj[[curve_name]][[i]]
+      gram_t <- crossprod(phi_t)
+      eig <- eigen((gram_t + t(gram_t)) / 2, symmetric = TRUE, only.values = TRUE)$values
+      phi_rcond <- safe_rcond(gram_t)
+
+      tibble::tibble(
+        specification = label,
+        time = as.Date(time_index[i]),
+        curve = curve_name,
+        phi_min_eig = min(eig),
+        phi_max_eig = max(eig),
+        phi_rcond = phi_rcond,
+        phi_cond = ifelse(is.na(phi_rcond) || phi_rcond <= 0, Inf, 1 / phi_rcond)
+      )
+    })
+  })
+}
+
+build_fit_error_panel <- function(fit_obj, observed_yields, curves) {
+  actual_curve <- build_curve_panel(observed_yields, curves)
+  fitted_curve <- fit_obj$curve
+
+  common_cols <- setdiff(intersect(colnames(actual_curve), colnames(fitted_curve)), "time")
+
+  actual_long <- tibble::as_tibble(actual_curve[, c("time", common_cols)]) %>%
+    dplyr::mutate(time = as.Date(time)) %>%
+    tidyr::pivot_longer(-time, names_to = "series", values_to = "actual")
+
+  fitted_long <- tibble::as_tibble(fitted_curve[, c("time", common_cols)]) %>%
+    dplyr::mutate(time = as.Date(time)) %>%
+    tidyr::pivot_longer(-time, names_to = "series", values_to = "fitted")
+
+  dplyr::left_join(actual_long, fitted_long, by = c("time", "series")) %>%
+    dplyr::mutate(
+      curve = sub("\\..*$", "", series),
+      tenor = sub("^.*\\.", "", series),
+      error = fitted - actual,
+      abs_error = abs(error)
+    )
+}
+
+build_alignment_diagnostics <- function(fit_obj, observed_yields, curves, mats, lambdas, cutoffs, label) {
+  check_phi_state <- rebuild_check_phi_path(
+    fit_obj = fit_obj,
+    observed_yields = observed_yields,
+    curves = curves,
+    mats = mats,
+    lambdas = lambdas,
+    cutoffs = cutoffs
+  )
+
+  sigma_path <- summarize_sigma_path(fit_obj, label)
+  phi_path <- summarize_check_phi_path(check_phi_state$check_phi, check_phi_state$time, curves, label)
+
+  error_panel <- build_fit_error_panel(fit_obj, observed_yields, curves) %>%
+    dplyr::mutate(specification = label)
+
+  worst_by_day <- error_panel %>%
+    dplyr::group_by(specification, time) %>%
+    dplyr::slice_max(abs_error, n = 1, with_ties = FALSE) %>%
+    dplyr::ungroup() %>%
+    dplyr::left_join(sigma_path, by = c("specification", "time")) %>%
+    dplyr::left_join(phi_path, by = c("specification", "time", "curve")) %>%
+    dplyr::mutate(
+      sigma_trace_pct = dplyr::percent_rank(sigma_trace),
+      sigma_min_eig_pct_low = dplyr::percent_rank(-sigma_min_eig),
+      phi_rcond_pct_low = dplyr::percent_rank(-phi_rcond),
+      phi_cond_pct = dplyr::percent_rank(phi_cond),
+      phi_rcond_floor = pmax(phi_rcond, 1e-12, na.rm = TRUE)
+    )
+
+  list(
+    sigma_path = sigma_path,
+    phi_path = phi_path,
+    error_panel = error_panel,
+    worst_by_day = worst_by_day
+  )
+}
+
+build_baseline_ns_curve <- function(observed_yields, curves, mats, lambdas, cutoffs) {
+  mat_str_local <- paste0("X", sapply(mats, numeric_to_matname))
+
+  curve_lambdas <- vapply(observed_yields, function(curve_df) {
+    lambda_grid_search(lambdas, curve_df, mats)
+  }, numeric(1))
+
+  bl_yields <- transpose(setNames(lapply(seq_along(observed_yields), function(i) {
+    bl_single_curve(curve_lambdas[i], observed_yields[[i]], cutoffs, mats)
+  }), curves))
+
+  baseline_list <- setNames(lapply(curves, function(curve_name) {
+    out <- data.frame(time = observed_yields[[curve_name]]$time, as.data.frame(bl_yields$nsfit[[curve_name]]$NSfit))
+    colnames(out) <- c("time", mat_str_local)
+    out
+  }), curves)
+
+  build_curve_panel(baseline_list, curves)
+}
+
+rebuild_curve_with_sigma <- function(fit_obj, observed_yields, curves, mats, lambdas, cutoffs, sigma_path) {
+  mat_str_local <- sapply(mats, numeric_to_matname)
+  mds <- as.vector(t(outer(curves, mat_str_local, paste, sep = ".")))
+
+  curve_lambdas <- vapply(observed_yields, function(curve_df) {
+    lambda_grid_search(lambdas, curve_df, mats)
+  }, numeric(1))
+
+  bl_yields <- transpose(setNames(lapply(seq_along(observed_yields), function(i) {
+    bl_single_curve(curve_lambdas[i], observed_yields[[i]], cutoffs, mats)
+  }), curves))
+
+  Y <- vecY(observed_yields, curves, mats)
+  P <- bln_build_P(curves, mats)
+  pY <- PY_full(Y$tY, P)
+
+  sqrt_sigma_state <- sqrt_inv_build(sigma_path)
+  sqrt_sigma_t <- sqrt_sigma_state$sqrt
+  sqrt_inv_sigma_t <- sqrt_sigma_state$inverse
+
+  phi_hat <- bln_phi_hat(bl_yields$phi, mds)
+  yb <- bln_YB(pY$py, sqrt_inv_sigma_t)
+  phib <- bln_phi_BT(phi_hat, P, sqrt_inv_sigma_t)
+  phic <- bln_phi_CT(phib, P)
+  yc <- PY_full(yb, t(P))
+
+  ycut <- cf_curve_cut(yc$py, curves, mats)
+  phicut <- cf_phi_cut(phic, curves, mats)
+  normalized <- bln_normalized_fit(ycut, phicut, curves, mats)
+
+  ycut_norm <- vapply(seq_len(nrow(ycut[[1]])), function(i) {
+    y_i <- unlist(lapply(curves, function(curve_name) {
+      as.numeric(ycut[[curve_name]][i, ])
+    }))
+    sqrt(mean(y_i^2))
+  }, numeric(1))
+
+  projection_rmse <- sqrt(mean(unlist(lapply(curves, function(curve_name) {
+    (as.matrix(normalized$n_yield[[curve_name]]) - as.matrix(ycut[[curve_name]]))^2
+  }))))
+
+  list(
+    curve = blce_rescale_yield(
+      normalized = normalized$n_yield,
+      sqrt_sigma_t = sqrt_sigma_t,
+      P = P,
+      ptype = "curve",
+      time = Y$time,
+      curves = curves,
+      mats = mats
+    ),
+    projection_rmse = projection_rmse,
+    mean_ycut_norm = mean(ycut_norm)
+  )
+}
+
+sigma_path_variants <- function(fit_obj) {
+  sigma_tv <- lapply(fit_obj$sigma_JT$tSigma, as.matrix)
+  sigma_array <- simplify2array(sigma_tv)
+  sigma_mean <- apply(sigma_array, c(1, 2), mean)
+
+  list(
+    full_sigma = sigma_tv,
+    static_mean_sigma = rep(list(sigma_mean), length(sigma_tv)),
+    diag_only_sigma = lapply(sigma_tv, function(sigma_t) diag(diag(sigma_t)))
+  )
+}
+
+summarize_sigma_rebuilds <- function(fit_obj, observed_yields, curves, mats, lambdas, cutoffs) {
+  baseline_curve <- build_baseline_ns_curve(
+    observed_yields = observed_yields,
+    curves = curves,
+    mats = mats,
+    lambdas = lambdas,
+    cutoffs = cutoffs
+  )
+
+  baseline_diag <- eval_in_sample_fit(
+    fit_obj = list(curve = baseline_curve),
+    observed_yields = observed_yields,
+    curves = curves,
+    mat_str = mat_str
+  )
+
+  sigma_variant_tbl <- purrr::imap_dfr(
+    sigma_path_variants(fit_obj),
+    function(sigma_path, sigma_variant) {
+      rebuilt <- rebuild_curve_with_sigma(
+        fit_obj = fit_obj,
+        observed_yields = observed_yields,
+        curves = curves,
+        mats = mats,
+        lambdas = lambdas,
+        cutoffs = cutoffs,
+        sigma_path = sigma_path
+      )
+
+      diag_obj <- eval_in_sample_fit(
+        fit_obj = list(curve = rebuilt$curve),
+        observed_yields = observed_yields,
+        curves = curves,
+        mat_str = mat_str
+      )
+
+      tibble::tibble(
+        sigma_variant = sigma_variant,
+        rmse = diag_obj$overall$rmse,
+        mae = diag_obj$overall$mae,
+        max_abs_err = diag_obj$overall$max_abs_err,
+        projection_rmse = rebuilt$projection_rmse,
+        mean_ycut_norm = rebuilt$mean_ycut_norm
+      )
+    }
+  )
+
+  dplyr::bind_rows(
+    tibble::tibble(
+      sigma_variant = "baseline_ns",
+      rmse = baseline_diag$overall$rmse,
+      mae = baseline_diag$overall$mae,
+      max_abs_err = baseline_diag$overall$max_abs_err,
+      projection_rmse = 0,
+      mean_ycut_norm = NA_real_
+    ),
+    sigma_variant_tbl
+  )
+}
+
+summarize_ecm_ranks <- function(fit_obj) {
+  tibble::tibble(
+    pair = names(fit_obj$curveECM),
+    rank = vapply(fit_obj$curveECM, function(ecm_obj) ecm_obj$rank, numeric(1))
+  )
+}
+
+summarize_sigma_block_coupling <- function(fit_obj, agg = c("mean", "median")) {
+  agg <- match.arg(agg)
+
+  aggregate_sigma <- function(sigma_list) {
+    sigma_array <- simplify2array(sigma_list)
+
+    if (agg == "mean") {
+      apply(sigma_array, c(1, 2), mean)
+    } else {
+      apply(sigma_array, c(1, 2), median)
+    }
+  }
+
+  purrr::map_dfr(names(fit_obj$sigma_JT$jSigma), function(tenor_name) {
+    sigma_t <- aggregate_sigma(fit_obj$sigma_JT$jSigma[[tenor_name]])
+    sigma_offdiag <- sigma_t
+    diag(sigma_offdiag) <- 0
+
+    tibble::tibble(
+      maturity = mats[match(tenor_name, mat_str)],
+      tenor = tenor_name,
+      diag_mean = mean(diag(sigma_t)),
+      offdiag_abs_mean = mean(abs(sigma_offdiag[row(sigma_offdiag) != col(sigma_offdiag)])),
+      offdiag_frob_share = norm(sigma_offdiag, type = "F") / norm(sigma_t, type = "F")
+    )
+  }) %>%
+    dplyr::arrange(maturity)
+}
+```
+
+```{r}
+## endogenous cross-curve estimation: 2010 window
+yields_2010 <- annual_yields[["2010"]]
+
+set.seed(fit_seed)
+cc_fit_2010 <- mc_fit_end(
+  yields = yields_2010,
+  lambdas = lambdas,
+  cutoffs = c(4, 8),
+  reference = "usa",
+  curves = curves,
+  mats = mats,
+  X_trunc = TRUE,
+  Xt_smooth = FALSE ,
+  smoother = "hp",
+  COV_TEST = FALSE, 
+  CR_S0_shrink_diag=0.5
+)
+
+plot(cc_fit_2010$curve$jpn.01Y, type = 'l', ylim=c(-4,4))
+lines(yields$jpn$X01Y, col = 'blue')
+```
+
+```{r}
+## endogenous cross-curve estimation: 2010 window without Xt smoothing
+set.seed(fit_seed)
+cc_fit_2010_nosmooth <- mc_fit_end(
+  yields = yields_2010,
+  lambdas = lambdas,
+  cutoffs = c(4, 8),
+  reference = "usa",
+  curves = curves,
+  mats = mats,
+  X_trunc = TRUE,
+  Xt_smooth = FALSE,
+  COV_TEST = FALSE
+)
+
+```
+
+
+```{r}
+## compare empirical tenor covariances to fitted covariance-regression covariances
+covcmp_2010_smooth <- compare_covreg_covariances(cc_fit_2010)
+covcmp_2010_nosmooth <- compare_covreg_covariances(cc_fit_2010_nosmooth)
+
+covcmp_overall <- dplyr::bind_rows(
+  smooth_rm = dplyr::summarise(
+    covcmp_2010_smooth$summary,
+    mean_frob_error = mean(frob_error),
+    mean_diag_mae = mean(diag_mae),
+    mean_offdiag_mae = mean(offdiag_mae)
+  ),
+  no_smooth = dplyr::summarise(
+    covcmp_2010_nosmooth$summary,
+    mean_frob_error = mean(frob_error),
+    mean_diag_mae = mean(diag_mae),
+    mean_offdiag_mae = mean(offdiag_mae)
+  ),
+  .id = "specification"
+)
+
+covcmp_overall
+
+print_covariance_comparison(covcmp_2010_smooth, "Smoothed Xt covariance comparison")
+print_covariance_comparison(covcmp_2010_nosmooth, "Unsmoothed Xt covariance comparison")
+
+```
+
+```{r}
+## cointegration ranks and sigma-variant rebuild test
+ecm_rank_2010 <- dplyr::bind_rows(
+  smooth_hp = summarize_ecm_ranks(cc_fit_2010),
+  no_smooth = summarize_ecm_ranks(cc_fit_2010_nosmooth),
+  .id = "fit_specification"
+)
+
+ecm_rank_2010
+
+sigma_variant_2010 <- dplyr::bind_rows(
+  smooth_hp = summarize_sigma_rebuilds(
+    fit_obj = cc_fit_2010,
+    observed_yields = yields_2010,
+    curves = curves,
+    mats = mats,
+    lambdas = lambdas,
+    cutoffs = c(4, 8)
+  ),
+  no_smooth = summarize_sigma_rebuilds(
+    fit_obj = cc_fit_2010_nosmooth,
+    observed_yields = yields_2010,
+    curves = curves,
+    mats = mats,
+    lambdas = lambdas,
+    cutoffs = c(4, 8)
+  ),
+  .id = "fit_specification"
+)
+
+sigma_variant_2010
+
+sigma_block_coupling_2010 <- summarize_sigma_block_coupling(cc_fit_2010)
+sigma_block_coupling_2010
+```
+
+```{r}
+## Sigma_t path diagnostics and alignment with worst fitted yields
+aligndiag_2010_smooth <- build_alignment_diagnostics(
+  fit_obj = cc_fit_2010,
+  observed_yields = yields_2010,
+  curves = curves,
+  mats = mats,
+  lambdas = lambdas,
+  cutoffs = c(4, 8),
+  label = "smooth_henderson"
+)
+
+aligndiag_2010_nosmooth <- build_alignment_diagnostics(
+  fit_obj = cc_fit_2010_nosmooth,
+  observed_yields = yields_2010,
+  curves = curves,
+  mats = mats,
+  lambdas = lambdas,
+  cutoffs = c(4, 8),
+  label = "no_smooth"
+)
+
+sigma_path_df <- dplyr::bind_rows(
+  aligndiag_2010_smooth$sigma_path,
+  aligndiag_2010_nosmooth$sigma_path
+)
+
+sigma_path_long <- sigma_path_df %>%
+  dplyr::select(specification, time, sigma_trace, sigma_min_eig, sigma_cond) %>%
+  tidyr::pivot_longer(
+    cols = c(sigma_trace, sigma_min_eig, sigma_cond),
+    names_to = "metric",
+    values_to = "value"
+  )
+
+ggplot(sigma_path_long, aes(x = time, y = value, color = specification)) +
+  geom_line(alpha = 0.9) +
+  facet_wrap(~metric, scales = "free_y", ncol = 1) +
+  labs(
+    title = expression("Time path diagnostics for " * Sigma[t]),
+    x = NULL,
+    y = NULL,
+    color = "Specification"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+worst_by_day_df <- dplyr::bind_rows(
+  aligndiag_2010_smooth$worst_by_day,
+  aligndiag_2010_nosmooth$worst_by_day
+)
+
+alignment_rank_corr <- worst_by_day_df %>%
+  dplyr::group_by(specification) %>%
+  dplyr::summarise(
+    spearman_abs_err_sigma_trace = cor(abs_error, sigma_trace, method = "spearman", use = "complete.obs"),
+    spearman_abs_err_sigma_min_eig = cor(abs_error, sigma_min_eig, method = "spearman", use = "complete.obs"),
+    spearman_abs_err_phi_rcond = cor(abs_error, phi_rcond, method = "spearman", use = "complete.obs"),
+    spearman_abs_err_phi_cond = cor(abs_error, phi_cond, method = "spearman", use = "complete.obs")
+  )
+
+alignment_rank_corr
+
+worst_by_day_df %>%
+  dplyr::arrange(dplyr::desc(abs_error)) %>%
+  dplyr::select(
+    specification, time, curve, tenor, actual, fitted, error, abs_error,
+    sigma_trace, sigma_min_eig, sigma_cond,
+    phi_min_eig, phi_rcond, phi_cond,
+    sigma_trace_pct, sigma_min_eig_pct_low, phi_rcond_pct_low, phi_cond_pct
+  ) %>%
+  head(15)
+```
+
+```{r}
+ggplot(worst_by_day_df, aes(x = sigma_trace, y = abs_error, color = specification)) +
+  geom_point(alpha = 0.75) +
+  geom_smooth(se = FALSE, method = "loess", span = 0.8) +
+  facet_wrap(~specification, scales = "free_x") +
+  labs(
+    title = "Worst daily fitted yield error vs Sigma_t trace",
+    x = expression("trace(" * Sigma[t] * ")"),
+    y = "Worst absolute yield error"
+  ) +
+  theme_minimal()
+
+ggplot(worst_by_day_df, aes(x = sigma_min_eig, y = abs_error, color = specification)) +
+  geom_point(alpha = 0.75) +
+  geom_smooth(se = FALSE, method = "loess", span = 0.8) +
+  facet_wrap(~specification, scales = "free_x") +
+  labs(
+    title = "Worst daily fitted yield error vs minimum eigenvalue of Sigma_t",
+    x = expression("min eig(" * Sigma[t] * ")"),
+    y = "Worst absolute yield error"
+  ) +
+  theme_minimal()
+
+ggplot(worst_by_day_df, aes(x = phi_rcond_floor, y = abs_error, color = specification)) +
+  geom_point(alpha = 0.75) +
+  geom_smooth(se = FALSE, method = "loess", span = 0.8) +
+  facet_wrap(~specification, scales = "free_x") +
+  scale_x_log10() +
+  labs(
+    title = "Worst daily fitted yield error vs reciprocal condition of check_phi_t",
+    x = "rcond(crossprod(check_phi_t))",
+    y = "Worst absolute yield error"
+  ) +
+  theme_minimal()
+```

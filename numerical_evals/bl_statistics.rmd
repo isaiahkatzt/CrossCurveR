@@ -6,21 +6,59 @@ output: html_document
 ---
 
 ```{r}
+library(here) 
+library(dplyr)
+
+raw_yields <- list(
+  usa_r <- "usa-full.csv", 
+  gbr_r <- "gbr-full.csv", 
+  jpn_r <- "jpn-full.csv", 
+  cad_r <- "cad-full.csv", 
+  ger_r <- "ger-full.csv", 
+  fra_r <- "fra-full.csv", 
+  itl_r <- "itl-full.csv", 
+  aus_r <- "aus-full.csv"
+)
+  
 curve_files <- list(
-  usa = "reconstructed_data/usa-bs.csv",
-  gbr = "reconstructed_data/gbr-bs.csv",
-  jpn = "reconstructed_data/jpn-bs.csv",
-  cad = "reconstructed_data/cad-bs.csv",
-  ger = "reconstructed_data/ger-bs.csv",
-  fra = "reconstructed_data/fra-bs.csv",
-  itl = "reconstructed_data/itl-bs-ib.csv",
-  aus = "reconstructed_data/aus-bs-ib.csv"
+  usa = "usa-bs.csv",
+  gbr = "gbr-bs.csv",
+  jpn = "jpn-bs.csv",
+  cad = "cad-bs.csv",
+  ger = "ger-bs.csv",
+  fra = "fra-bs.csv",
+  itl = "itl-bs-ib.csv",
+  aus = "aus-bs-ib.csv"
 )
 
-curves <- lapply(curve_files, read.csv, stringsAsFactors = FALSE)
+curves = c("usa", "gbr", "jpy", "cad", "ger", "fra", "itl", "aus")
+
+yields <- lapply(curve_files, function(x) {
+  read.csv(here("reconstructed_data", x), stringsAsFactors = FALSE)
+})
+
+yields <- lapply(yields, function(x) {
+ x %>% dplyr::filter(as.Date(time) >= as.Date("2010-01-01") & 
+                       as.Date(time) <= as.Date("2020-12-31"))
+})
 ```
 
 ```{r}
+raw_curves <- lapply(raw_yields, function(x) {
+  read.csv(here("reconstructed_data", x), stringsAsFactors = FALSE)
+})
+
+raw_curves <- lapply(raw_curves, function(x) {
+  x %>% dplyr::filter(as.Date(time) >= as.Date("2010-01-01") & 
+                        as.Date(time) <= as.Date("2020-12-31"))
+})
+
+rebuild_counts <- setNames(lapply(raw_curves, function(x) colSums(!is.na(x))), curves)
+rebuild_counts
+```
+
+```{r}
+## curve summary statistics 
 summarize_curve <- function(curve_name, curve_data) {
   tenor_cols <- setdiff(names(curve_data), "time")
   tenor_data <- lapply(curve_data[tenor_cols], as.numeric)
@@ -32,12 +70,9 @@ summarize_curve <- function(curve_name, curve_data) {
       curve = curve_name,
       tenor = tenor,
       mean = mean(values, na.rm = TRUE),
+      sd = sd(values, na.rm = TRUE), 
       min = min(values, na.rm = TRUE),
-      q25 = unname(quantile(values, 0.25, na.rm = TRUE)),
-      median = median(values, na.rm = TRUE),
-      q75 = unname(quantile(values, 0.75, na.rm = TRUE)),
-      max = max(values, na.rm = TRUE),
-      variance = var(values, na.rm = TRUE)
+      max = max(values, na.rm = TRUE)
     )
   })
 
@@ -46,11 +81,12 @@ summarize_curve <- function(curve_name, curve_data) {
 
 curve_summary_stats <- do.call(
   rbind,
-  lapply(names(curves), function(curve_name) {
-    summarize_curve(curve_name, curves[[curve_name]])
+  lapply(names(yields), function(curve_name) {
+    summarize_curve(curve_name, yields[[curve_name]])
   })
 )
 
 row.names(curve_summary_stats) <- NULL
 curve_summary_stats
 ```
+

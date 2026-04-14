@@ -1,61 +1,298 @@
 ---
 title: "cr_synthetic_eval"
 author: "Isaiah Katz"
-date: "2026-04-07"
+date: "2026-04-10"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+load_crosscurveR <- function() {
+  project_files <- c(
+    "packages.R",
+    "core_formatting.R",
+    "yield_estimation/curve_reformat.R",
+    "yield_estimation/matrix_helpers.R",
+    "yield_estimation/cr_core_estim.R",
+    "yield_estimation/cr_eval.R",
+    "yield_estimation/bl_single_curve.R",
+    "yield_estimation/bl_feature_extract.R",
+    "yield_estimation/bl_normalize.R",
+    "yield_estimation/bl_cross_estimation.R"
+  )
+
+  invisible(lapply(project_files, function(path) {
+    sys.source(here::here(path), envir = .GlobalEnv)
+  }))
+}
+
+load_crosscurveR()
 ```
 
 ```{r}
-source("yield_estimation/cr_eval.R")
-```
-
-```{r}
-## synthetic data evaluation: gaussian covariates 
 set.seed(999)
-P <- 3
-Q <- 2
-N <- 500
-  
-B_true <- matrix(c(0.7, -0.4, 0.2,  0.5, -0.6,  0.3), nrow = P, byrow = TRUE)
-S0_true <- matrix(c(1.0, 0.2, 0.1, 0.2, 0.8, 0.15, 0.1, 0.15, 0.9), nrow = P, byrow = TRUE)
-Sigma_hat <- cr_build(fit, sim$X, return_array = TRUE)
-  
-sim <- cr_synthetic(N = N, B = B_true, S0 = S0_true, seed = 101)
-  
-fit <- zero_mean_covreg_em(W = sim$W, X = sim$X, init = "adaptive", max_iter = 500,
-    tol = 1e-8, verbose = FALSE) 
 
-sigma <- cr_build(sim)
-sigma_hat <- cr_build(fit, X_new = sim$X)
+curves <- c("usa", "gbr", "jpn", "cad")
+mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360)
+mat_cols <- paste0("X", sapply(mats, numeric_to_matname))
 
-cov_array_mse(sigma_hat, sigma)
+N <- 320
+time_index <- seq.Date(from = as.Date("2016-01-01"), by = "day", length.out = N)
+
+curve_lambdas <- c(
+  usa = 0.0609,
+  gbr = 0.0609,
+  jpn = 0.0609,
+  cad = 0.0609
+)
 ```
 
 ```{r}
-## synthetic data evaluation: stationary AR covariates 
-N <- 500
-Q_ar <- 2
+simulate_rw <- function(n, start, drift = 0, sd = 0.02) {
+  start + cumsum(c(0, drift + rnorm(n - 1, sd = sd)))
+}
 
-phi   <- c(0.85, 0.60)
-sigma <- c(0.4, 0.7)
+simulate_ar1 <- function(n, phi = 0.9, sd = 0.08) {
+  as.numeric(arima.sim(model = list(ar = phi), n = n, sd = sd))
+}
 
-X_ar <- sapply(1:Q_ar, function(j) arima.sim(n = N, model = list(ar = phi[j]), sd = sigma[j]))
-X_ar <- as.matrix(X_ar)
-X <- X_ar
-
-stationary_sim <- cr_synthetic(N = N, B = B_true, S0 = S0_true, X = X, seed = 123)
-stationary_fit <- zero_mean_covreg_em(W = stationary_sim$W, X = stationary_sim$X, init = "adaptive", max_iter = 500,
-    tol = 1e-8, verbose = FALSE) 
-
-sigma_stationary <- cr_build(stationary_sim)
-sigma_hat_stationary <- cr_build(stationary_fit, X_new = X)
-
-cov_array_mse(sigma_stationary, sigma_hat_stationary)
-
-stationary_fit$S0 - S0_true
+build_curve_df <- function(yield_matrix, time_index, mats) {
+  out <- data.frame(time = time_index, as.data.frame(yield_matrix))
+  colnames(out) <- c("time", paste0("X", sapply(mats, numeric_to_matname)))
+  out
+}
 ```
+
+```{r}
+## USA carries the shared stochastic trends in L, S, and C
+beta_usa <- cbind(
+  level = simulate_rw(N, start = 2.75, drift = 0.0020, sd = 0.040),
+  slope = simulate_rw(N, start = -1.80, drift = 0.0000, sd = 0.030),
+  curve = simulate_rw(N, start = 0.85, drift = 0.0000, sd = 0.024)
+)
+
+## stationary latent states that drive cross-curve cointegrating spreads
+ci_latent <- cbind(
+  level = simulate_ar1(N, phi = 0.72, sd = 0.065),
+  slope = simulate_ar1(N, phi = 0.66, sd = 0.055),
+  curve = simulate_ar1(N, phi = 0.58, sd = 0.042)
+)
+
+curve_offsets <- list(
+  usa = c(0.00, 0.00, 0.00),
+  gbr = c(0.35, -0.10, 0.08),
+  jpn = c(-1.60, 0.30, -0.10),
+  cad = c(0.20, -0.06, 0.12)
+)
+
+curve_loadings <- list(
+  gbr = matrix(c(
+    0.95, 0.10, 0.05,
+    0.08, 0.88, 0.10,
+    0.04, 0.12, 0.78
+  ), nrow = 3, byrow = TRUE),
+  jpn = matrix(c(
+    0.72, -0.05, 0.08,
+    0.10, 0.82, 0.06,
+    -0.04, 0.10, 0.68
+  ), nrow = 3, byrow = TRUE),
+  cad = matrix(c(
+    0.86, 0.06, 0.10,
+    0.05, 0.76, 0.12,
+    0.02, 0.14, 0.84
+  ), nrow = 3, byrow = TRUE)
+)
+
+curve_local_ci <- list(
+  gbr = cbind(
+    level = simulate_ar1(N, phi = 0.42, sd = 0.026),
+    slope = simulate_ar1(N, phi = 0.38, sd = 0.022),
+    curve = simulate_ar1(N, phi = 0.34, sd = 0.018)
+  ),
+  jpn = cbind(
+    level = simulate_ar1(N, phi = 0.46, sd = 0.024),
+    slope = simulate_ar1(N, phi = 0.40, sd = 0.020),
+    curve = simulate_ar1(N, phi = 0.36, sd = 0.016)
+  ),
+  cad = cbind(
+    level = simulate_ar1(N, phi = 0.44, sd = 0.025),
+    slope = simulate_ar1(N, phi = 0.36, sd = 0.021),
+    curve = simulate_ar1(N, phi = 0.32, sd = 0.017)
+  )
+)
+
+curve_ci_spreads <- list(
+  usa = matrix(0, nrow = N, ncol = 3),
+  gbr = ci_latent %*% curve_loadings$gbr + curve_local_ci$gbr,
+  jpn = ci_latent %*% curve_loadings$jpn + curve_local_ci$jpn,
+  cad = ci_latent %*% curve_loadings$cad + curve_local_ci$cad
+)
+colnames(curve_ci_spreads$usa) <- colnames(beta_usa)
+colnames(curve_ci_spreads$gbr) <- colnames(beta_usa)
+colnames(curve_ci_spreads$jpn) <- colnames(beta_usa)
+colnames(curve_ci_spreads$cad) <- colnames(beta_usa)
+
+curve_betas <- list(
+  usa = sweep(beta_usa, 2, curve_offsets$usa, FUN = "+"),
+  gbr = beta_usa + curve_ci_spreads$gbr,
+  jpn = beta_usa + curve_ci_spreads$jpn,
+  cad = beta_usa + curve_ci_spreads$cad
+)
+
+curve_betas$gbr <- sweep(curve_betas$gbr, 2, curve_offsets$gbr, FUN = "+")
+curve_betas$jpn <- sweep(curve_betas$jpn, 2, curve_offsets$jpn, FUN = "+")
+curve_betas$cad <- sweep(curve_betas$cad, 2, curve_offsets$cad, FUN = "+")
+
+base_yields <- lapply(curves, function(curve_name) {
+  curve_betas[[curve_name]] %*% NS_loadings(curve_lambdas[[curve_name]], mats)
+})
+names(base_yields) <- curves
+```
+
+```{r}
+## pairwise USA-XYZ factor spreads are stationary by construction
+true_ci_spreads <- lapply(setdiff(curves, "usa"), function(curve_name) {
+  spread_df <- as.data.frame(curve_betas[[curve_name]] - curve_betas$usa)
+  colnames(spread_df) <- c("L_spread", "S_spread", "C_spread")
+  spread_df
+})
+names(true_ci_spreads) <- setdiff(curves, "usa")
+
+ci_stationarity_summary <- purrr::imap_dfr(true_ci_spreads, function(spread_df, curve_name) {
+  tibble::tibble(
+    curve = curve_name,
+    factor = colnames(spread_df),
+    mean = vapply(spread_df, mean, numeric(1)),
+    adf_pvalue = vapply(spread_df, function(x) tseries::adf.test(x)$p.value, numeric(1))
+  )
+})
+
+ci_stationarity_summary
+```
+
+```{r}
+## true covariance-regression covariates used to create residual noise
+Xt_true <- scale(ci_latent)
+colnames(Xt_true) <- c("ci_level", "ci_slope", "ci_curve")
+
+base_corr <- matrix(
+  c(
+    1.00, 0.55, 0.35, 0.50,
+    0.55, 1.00, 0.30, 0.45,
+    0.35, 0.30, 1.00, 0.28,
+    0.50, 0.45, 0.28, 1.00
+  ),
+  nrow = length(curves),
+  byrow = TRUE
+)
+
+term_scale <- seq(0.012, 0.035, length.out = length(mats))
+idio_scale <- c(1.00, 0.95, 0.85, 0.92)
+
+S0_true <- setNames(lapply(seq_along(mats), function(j) {
+  sd_vec <- term_scale[j] * idio_scale
+  diag(sd_vec) %*% base_corr %*% diag(sd_vec)
+}), mat_cols)
+
+B_template <- matrix(
+  c(
+    0.65, 0.10, 0.05,
+    0.35, 0.70, 0.12,
+    0.08, 0.25, 0.75,
+    0.42, 0.18, 0.55
+  ),
+  nrow = length(curves),
+  byrow = TRUE
+)
+
+B_true <- setNames(lapply(seq_along(mats), function(j) {
+  tilt <- 0.008 + 0.020 * (j - 1) / (length(mats) - 1)
+  sign_pattern <- c(1, 1, -1, 1)
+  B_j <- tilt * B_template
+  B_j[, 3] <- sign_pattern * B_j[, 3]
+  B_j
+}), mat_cols)
+
+```
+
+```{r}
+## tenor-by-tenor residual draws
+residual_draws <- setNames(lapply(mat_cols, function(mat_name) {
+  cr_synthetic(
+    N = N,
+    B = B_true[[mat_name]],
+    S0 = S0_true[[mat_name]],
+    X = Xt_true,
+    intercept = FALSE
+  )
+}), mat_cols)
+
+synthetic_yields <- setNames(lapply(seq_along(curves), function(curve_idx) {
+  curve_name <- curves[curve_idx]
+  yield_matrix <- base_yields[[curve_name]]
+
+  for (j in seq_along(mat_cols)) {
+    yield_matrix[, j] <- yield_matrix[, j] + residual_draws[[mat_cols[j]]]$W[, curve_idx]
+  }
+
+  build_curve_df(yield_matrix, time_index, mats)
+}), curves)
+```
+
+```{r}
+## quick sanity check: curve shapes look realistic across tenors
+snapshot_rows <- c(1, round(N / 2), N)
+
+snapshot_panel <- purrr::imap_dfr(synthetic_yields, function(curve_df, curve_name) {
+  curve_df[snapshot_rows, ] %>%
+    dplyr::mutate(snapshot = c("start", "mid", "end"), curve = curve_name) %>%
+    tidyr::pivot_longer(cols = -c(time, snapshot, curve), names_to = "tenor", values_to = "yield") %>%
+    dplyr::mutate(maturity_months = mats[match(tenor, mat_cols)])
+})
+
+ggplot2::ggplot(snapshot_panel, ggplot2::aes(x = maturity_months, y = yield, color = curve)) +
+  ggplot2::geom_line(linewidth = 0.8) +
+  ggplot2::geom_point(size = 1.4) +
+  ggplot2::facet_wrap(~snapshot, nrow = 1) +
+  ggplot2::scale_x_continuous(breaks = mats) +
+  ggplot2::labs(
+    title = "Synthetic Nelson-Siegel yield curves",
+    x = "Maturity (months)",
+    y = "Yield"
+  ) +
+  ggplot2::theme_minimal()
+```
+
+```{r}
+## baseline NS fit on the synthetic yields
+marginal_dns <- lapply(synthetic_yields, function(curve_df) {
+  sc_fit(yields = curve_df, mats = mats, type = "nelson", lambdas = curve_lambdas[["usa"]], ts = FALSE)
+})
+
+ns_fit_mse <- setNames(vapply(curves, function(curve_name) {
+  mean((marginal_dns[[curve_name]]$yields - as.matrix(synthetic_yields[[curve_name]][, -1]))^2)
+}, numeric(1)), curves)
+
+ns_fit_mse
+```
+
+```{r}
+## first endogenous cross-curve fit on the synthetic data
+synthetic_mc_fit <- mc_fit_end(
+  yields = synthetic_yields,
+  lambdas = curve_lambdas[["usa"]],
+  cutoffs = c(4, 8),
+  reference = "usa",
+  curves = curves,
+  mats = mats,
+  X_trunc = FALSE,
+  Xt_smooth = FALSE,
+  smoother = "rm",
+  COV_TEST = FALSE,
+  CR_maxiter = 500,
+  CR_tol = 1e-6
+)
+```
+
 

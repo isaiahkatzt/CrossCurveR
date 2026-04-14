@@ -3,8 +3,8 @@
 #############################################
 
 zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter = 500, tol = 1e-8,
-    S0 = NULL, B = NULL, ridge_S0 = 1e-8, ridge_X = 1e-10, check_every = 1, use_loglik = TRUE,
-    verbose = FALSE, store_path = TRUE) {
+    S0 = NULL, B = NULL, ridge_S0 = 1e-8, ridge_X = 1e-10, S0_shrink_diag = 0,
+    check_every = 1, use_loglik = TRUE, verbose = FALSE, store_path = TRUE) {
   
   init <- match.arg(init)
   
@@ -43,6 +43,18 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
   symmetrize <- function(A) {
     0.5 * (A + t(A))
   }
+
+  shrink_to_diagonal <- function(A, shrink) {
+    if (!is.numeric(shrink) || length(shrink) != 1 || is.na(shrink) || shrink < 0 || shrink > 1) {
+      stop("S0_shrink_diag must be a numeric scalar between 0 and 1.")
+    }
+    diag_A <- diag(diag(A))
+    (1 - shrink) * A + shrink * diag_A
+  }
+
+  regularize_S0 <- function(A) {
+    shrink_to_diagonal(symmetrize(A), S0_shrink_diag) + diag(ridge_S0, nrow(A))
+  }
   
   compute_loglik <- function(W, X, B, S0) {
     iS0 <- safe_solve(S0, ridge = ridge_S0)
@@ -69,7 +81,7 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
   if (is.null(S0)) {
     S0 <- cov(W)
   }
-  S0 <- symmetrize(S0) + diag(ridge_S0, P)
+  S0 <- regularize_S0(S0)
   
   if (is.null(B)) {
     if (init == "static") {
@@ -134,7 +146,7 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
     B <- t(W_tilde) %*% X_tilde %*% safe_solve(XtX)
     
     E <- W_tilde - X_tilde %*% t(B)
-    S0 <- symmetrize(crossprod(E) / N) + diag(ridge_S0, P)
+    S0 <- regularize_S0(crossprod(E) / N)
     
     # sign normalization 
     idx <- which.max(abs(B))
@@ -198,7 +210,8 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
     sz = sz,
     iter = iter,
     converged = converged,
-    loglik = if (use_loglik) ll_now else NULL
+    loglik = if (use_loglik) ll_now else NULL,
+    S0_shrink_diag = S0_shrink_diag
   )
   
   if (store_path) {

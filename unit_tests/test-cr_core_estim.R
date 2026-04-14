@@ -23,6 +23,19 @@ test_that("zero_mean_covreg supports adaptive initialization and early terminati
   expect_lte(fit$iter, 20)
 })
 
+test_that("covariance regression shrinkage can diagonalize S0", {
+  set.seed(123)
+  W <- cbind(seq(1, 10), seq(1, 10) + c(rep(0, 5), rep(3, 5)))
+  X <- cbind(1, seq(-1, 1, length.out = 10))
+
+  fit_dense <- zero_mean_covreg_em(W, X, init = "static", max_iter = 3, S0_shrink_diag = 0)
+  fit_diag <- zero_mean_covreg_em(W, X, init = "static", max_iter = 3, S0_shrink_diag = 1)
+
+  expect_gt(abs(fit_dense$S0[1, 2]), 0)
+  expect_equal(fit_diag$S0[1, 2], 0, tolerance = 1e-10)
+  expect_equal(fit_diag$S0_shrink_diag, 1)
+})
+
 test_that("dynamic_mean_covreg is documented as pending implementation", {
   skip("dynamic_mean_covreg is not implemented yet")
 })

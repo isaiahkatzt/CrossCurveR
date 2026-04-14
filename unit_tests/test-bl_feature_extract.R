@@ -58,9 +58,20 @@ test_that("spread and reversion helpers normalize and rank feature blocks", {
   G <- diag(3)
   spread <- blmc_cspread(cc_betas, G, normalize = TRUE)
 
-  expect_equal(round(colMeans(spread), 8), c(0, 0, 0))
-  expect_equal(round(apply(spread, 2, sd), 8), c(1, 1, 1))
+  expect_equal(unname(round(colMeans(spread), 8)), c(0, 0, 0))
+  expect_equal(unname(round(apply(spread, 2, sd), 8)), c(1, 1, 1))
   expect_equal(blmc_Fselect(matrix(c(3, 4, 0, 1), nrow = 2)), 1)
+})
+
+test_that("blmc_cspread prefixes spread columns with the non-reference curve name", {
+  cc_betas <- matrix(seq_len(18), ncol = 6)
+  colnames(cc_betas) <- c("usa.L", "usa.S", "usa.C", "gbr.L", "gbr.S", "gbr.C")
+  G <- diag(6)[, 1:2, drop = FALSE]
+  colnames(G) <- c("r1", "r2")
+
+  spread <- blmc_cspread(cc_betas, G, curve_name = "gbr", normalize = FALSE)
+
+  expect_equal(colnames(spread), c("gbr.r1", "gbr.r2"))
 })
 
 test_that("blcc_cointegration, Xt builders, and Wj builders assemble expected structures", {
@@ -70,19 +81,24 @@ test_that("blcc_cointegration, Xt builders, and Wj builders assemble expected st
     list(
       blmc_VAR = function(...) list(gbr = matrix(1:12, ncol = 3)),
       blmc_ECM = function(...) list(Fmatrix = matrix(c(3, 0, 0, 1), nrow = 2), Gmatrix = diag(3), rank = 1),
-      blmc_cspread = function(...) matrix(1:9, ncol = 3)
+      blmc_cspread = function(..., curve_name) {
+        out <- matrix(1:9, ncol = 3)
+        colnames(out) <- paste0(curve_name, ".", paste0("r", 1:3))
+        out
+      }
     ),
     blcc_cointegration(blsc_list, curves = fixture_curves, reference = "usa")
   )
 
   expect_equal(names(cointegration), c("cc_cspread", "cc_ecm", "cc_beta"))
   expect_equal(names(cointegration$cc_cspread), "gbr")
+  expect_equal(colnames(cointegration$cc_cspread$gbr), c("gbr.r1", "gbr.r2", "gbr.r3"))
 
   full_xt <- blcc_build_Xt(
     cc_cspread = list(gbr = matrix(1:9, ncol = 3), jpn = matrix(10:18, ncol = 3)),
     cc_ecm = list(
-      gbr = list(Fmatrix = matrix(c(3, 4, 0, 0), nrow = 2)),
-      jpn = list(Fmatrix = matrix(c(0, 1, 0, 5), nrow = 2))
+      gbr = list(Fmatrix = matrix(c(3, 4, 0, 0), nrow = 2), rank = 1),
+      jpn = list(Fmatrix = matrix(c(0, 1, 0, 5), nrow = 2), rank = 1)
     ),
     trunc = TRUE
   )

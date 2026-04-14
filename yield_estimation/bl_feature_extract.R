@@ -36,9 +36,11 @@ blmc_ECM <- function(cc_betas, estim = "ML", type = "eigen", alpha = 0.1) {
   vecm_unrestricted <- VECM(cc_betas, lag = lag_opt - 1, estim = estim, include = "const")
   r_test <- rank.test(vecm_unrestricted, type = type, cval = alpha)
   r <- r_test$r
+  K <- ncol(cc_betas)
   
-  ## rank zero condition 
-  if (r == 0) {
+  ## tsDyn::VECM requires 1 <= r <= K - 1. Treat degenerate selections
+  ## as "no usable cointegration restriction" for downstream Xt construction.
+  if (!is.finite(r) || r <= 0 || r >= K) {
     return(list(Gmatrix = 0, Fmatrix = 0, rank = 0))
   }
   
@@ -50,8 +52,27 @@ blmc_ECM <- function(cc_betas, estim = "ML", type = "eigen", alpha = 0.1) {
   return(list(Fmatrix = Fmat, Gmatrix = Gmat, rank = r))
 }
 
-blmc_cspread <- function(cc_betas, Gmatrix, normalize = TRUE) {
+blmc_cspread <- function(cc_betas, Gmatrix, curve_name = NULL, normalize = TRUE) {
   Xt <- cc_betas %*% Gmatrix 
+
+  if (is.null(curve_name)) {
+    curve_labels <- unique(sub("\\..*$", "", colnames(cc_betas)))
+    if (length(curve_labels) >= 2) {
+      curve_name <- curve_labels[[2]]
+    }
+  }
+
+  spread_names <- colnames(Xt)
+  if (is.null(spread_names)) {
+    spread_names <- paste0("r", seq_len(ncol(Xt)))
+  }
+
+  if (!is.null(curve_name) && nzchar(curve_name)) {
+    colnames(Xt) <- paste0(curve_name, ".", spread_names)
+  } else {
+    colnames(Xt) <- spread_names
+  }
+
   if (normalize) {
     Xt <- sweep(Xt, 2, colMeans(Xt), FUN = "-")
     Xt <- sweep(Xt, 2, apply(Xt, 2, sd), FUN = "/")
@@ -74,7 +95,12 @@ blcc_cointegration <- function(blsc_list, curves, reference, estim = "ML", type 
   ## cointegration spread construction 
   full_cspread <- setNames(lapply(seq_along(cc_betas), function(curve) {
     if (full_ecm[[curve]]$rank != 0) {
-      blmc_cspread(cc_betas = cc_betas[[curve]], Gmatrix = full_ecm[[curve]]$Gmatrix, normalize = normalize)
+      blmc_cspread(
+        cc_betas = cc_betas[[curve]],
+        Gmatrix = full_ecm[[curve]]$Gmatrix,
+        curve_name = names(cc_betas)[[curve]],
+        normalize = normalize
+      )
     }
   }), names(cc_betas))
   
@@ -87,12 +113,22 @@ blcc_cointegration <- function(blsc_list, curves, reference, estim = "ML", type 
 
 blcc_build_Xt <- function(cc_cspread, cc_ecm, trunc = FALSE) {
   ## construct full Xt covariate matrix 
+  valid_idx <- which(vapply(cc_ecm, function(x) {
+    is.list(x) && is.numeric(x$rank) && length(x$rank) == 1 && x$rank > 0
+  }, logical(1)))
+  
+  if (length(valid_idx) == 0) {
+    stop("No usable cointegration relationships were identified for Xt construction.")
+  }
+  
   if (!trunc) {
-    Xt <- do.call(cbind, cc_cspread) 
+    Xt <- do.call(cbind, cc_cspread[valid_idx]) 
   } else {
-    Fmatrix_list <- lapply(cc_ecm, `[[`, "Fmatrix")
+    Fmatrix_list <- lapply(cc_ecm[valid_idx], `[[`, "Fmatrix")
     Fnorms <- lapply(Fmatrix_list, blmc_Fselect)
-    Xt <- do.call(cbind, lapply(seq_along(cc_cspread), function(x) cc_cspread[[x]][, Fnorms[[x]]]))
+    Xt <- do.call(cbind, lapply(seq_along(valid_idx), function(i) {
+      cc_cspread[[valid_idx[[i]]]][, Fnorms[[i]], drop = FALSE]
+    }))
   }
   return(Xt) 
 }
@@ -109,11 +145,13 @@ blcc_build_Wj <- function(curve_nsfit, mats){
 }
 
 blcc_fe <- function(Xt, Wt, mats, covreg=zero_mean_covreg_em,
-                    init = "adaptive", max_iter = 1000, tol = 1e-10, S0 = NULL, B = NULL, verb = FALSE, term = FALSE) {
+                    init = "adaptive", max_iter = 1000, tol = 1e-10, S0 = NULL, B = NULL,
+                    S0_shrink_diag = 0, verb = FALSE, term = FALSE) {
   ## baseline cross-curve feature extraction
   BS0_list <- lapply(Wt, function(Wj) {
     covreg(W=Wj, X=Xt, init = init, max_iter = max_iter, tol = tol, S0 = S0, B = B, 
-           ridge_S0=1e-8, ridge_X = 1e-10, check_every=1, use_loglik=TRUE, verbose=FALSE, store_path=TRUE)
+           ridge_S0=1e-8, ridge_X = 1e-10, S0_shrink_diag = S0_shrink_diag,
+           check_every=1, use_loglik=TRUE, verbose=FALSE, store_path=TRUE)
            #verb = verb, term = term)
   })
   return(BS0_list) 
