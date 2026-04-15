@@ -58,15 +58,15 @@ bgroup
 ## primary test 
 set.seed(999)
 tmp <- mc_fit_end(yields=yields, lambdas=lambdas, cutoffs=c(4,8), reference="usa", curves=curves,mats=mats, X_trunc=TRUE, 
-                  Xt_smooth=TRUE, smoother="rm", COV_TEST = FALSE)
+                  Xt_smooth=TRUE, smoother="rm")
 
 tmp_marginal <- mc_fit_end(yields=yields, lambdas=lambdas, cutoffs=c(4,8), reference="usa", curves=curves,mats=mats, X_trunc=TRUE, 
-                  Xt_smooth=TRUE, smoother="rm", COV_TEST = TRUE)
+                  Xt_smooth=TRUE, smoother="rm")
 
 
 set.seed(998)
 tmp0 <- mc_fit_end(yields=yields, lambdas=lambdas, cutoffs=c(4,8), reference="usa", curves=curves, mats=mats, X_trunc=TRUE, 
-                  Xt_smooth=TRUE, smoother="rm", k_count=25, k_pass=2, COV_TEST = FALSE)
+                  Xt_smooth=TRUE, smoother="rm", k_count=25, k_pass=2)
 
 x1_synth <- arima.sim(model = list(ar=c(0.1)), 250)
 x2_synth <- arima.sim(model = list(ar=c(-0.9)), 250)
@@ -358,4 +358,3 @@ plot(tmp$curve$gbr.05Y, type='l', ylim=c(-5,5))
 
 tmp$BS0$X01M$s_est
 ```
-

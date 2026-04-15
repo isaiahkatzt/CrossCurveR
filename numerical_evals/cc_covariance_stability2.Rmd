@@ -553,7 +553,6 @@ cc_fit_2010 <- mc_fit_end(
   X_trunc = TRUE,
   Xt_smooth = FALSE ,
   smoother = "hp",
-  COV_TEST = FALSE, 
   CR_S0_shrink_diag=0.5
 )
 
@@ -573,7 +572,6 @@ cc_fit_2010_nosmooth <- mc_fit_end(
   mats = mats,
   X_trunc = TRUE,
   Xt_smooth = FALSE,
-  COV_TEST = FALSE
 )
 
 ```

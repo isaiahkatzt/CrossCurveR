@@ -37,7 +37,8 @@ curve_files <- list(
   gbr = "gbr-bs.csv",
   jpn = "jpn-bs.csv",
   cad = "cad-bs.csv",
-  ger = "ger-bs.csv"
+  ger = "ger-bs.csv", 
+  fra = "fra-bs.csv"
 )
 
 curves <- names(curve_files)
@@ -53,7 +54,7 @@ yields <- lapply(curve_files, function(file_name) {
 })
 
 yields <- lapply(yields, function(curve_df) {
-  curve_df |>
+  curve_df %>%
     dplyr::filter(
       as.Date(time) >= start_date,
       as.Date(time) <= end_date
@@ -81,7 +82,7 @@ build_curve_panel <- function(yield_list, curves) {
     out <- cbind(out, curve_df)
   }
 
-  out
+  return(out)
 }
 
 fit_annual_dly_models <- function(annual_yields, mats, lambdas, curves, reference,
@@ -103,15 +104,30 @@ fit_annual_dly_models <- function(annual_yields, mats, lambdas, curves, referenc
   }), names(annual_yields))
 }
 
-extract_annual_dns_estimates <- function(annual_dly_fits, curves) {
-  setNames(lapply(annual_dly_fits, function(fit_obj) {
+fit_annual_baseline_models <- function(annual_yields, mats, lambdas, curves, seed = NULL) {
+  if (!is.null(seed)) {
+    set.seed(seed)
+  }
+
+  setNames(lapply(annual_yields, function(yield_window) {
+    dly_all_sc(
+      lambdas = lambdas,
+      yields = yield_window,
+      mats = mats,
+      curves = curves
+    )
+  }), names(annual_yields))
+}
+
+extract_annual_baseline_estimates <- function(annual_baseline_fits, curves) {
+  setNames(lapply(annual_baseline_fits, function(fit_obj) {
     setNames(lapply(curves, function(curve_name) {
-      dns_fit <- fit_obj$single_curve[[curve_name]]
-      dns_df <- data.frame(dns_fit$time, as.data.frame(dns_fit$nsfit$NSfit))
-      colnames(dns_df) <- c("time", dns_fit$yield_names)
-      dns_df
+      baseline_fit <- fit_obj[[curve_name]]
+      baseline_df <- data.frame(baseline_fit$time, as.data.frame(baseline_fit$nsfit$NSfit))
+      colnames(baseline_df) <- c("time", baseline_fit$yield_names)
+      baseline_df
     }), curves)
-  }), names(annual_dly_fits))
+  }), names(annual_baseline_fits))
 }
 
 extract_annual_dly_estimates <- function(annual_dly_fits, curves,
@@ -172,16 +188,24 @@ error_summary <- function(error_df, model_name) {
       rmse = sqrt(mean(error_mat^2, na.rm = TRUE)),
       mae = mean(abs(error_mat), na.rm = TRUE)
     ),
-    by_curve = error_long |>
-      dplyr::group_by(curve) |>
+    by_curve = error_long %>%
+      dplyr::group_by(curve) %>%
       dplyr::summarise(
         model = model_name,
         rmse = sqrt(mean(error^2, na.rm = TRUE)),
         mae = mean(abs(error), na.rm = TRUE),
         .groups = "drop"
       ),
-    by_maturity = error_long |>
-      dplyr::group_by(maturity) |>
+    by_maturity = error_long %>%
+      dplyr::group_by(maturity) %>%
+      dplyr::summarise(
+        model = model_name,
+        rmse = sqrt(mean(error^2, na.rm = TRUE)),
+        mae = mean(abs(error), na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by_curve_tenor = error_long %>%
+      dplyr::group_by(curve, tenor = maturity) %>%
       dplyr::summarise(
         model = model_name,
         rmse = sqrt(mean(error^2, na.rm = TRUE)),
@@ -190,113 +214,233 @@ error_summary <- function(error_df, model_name) {
       )
   )
 }
+
+mc_fit_spec_ready <- function(fit_spec) {
+  if (is.null(fit_spec$xt_smooth)) {
+    return(FALSE)
+  }
+
+  if (isTRUE(fit_spec$xt_smooth) && is.null(fit_spec$smoother)) {
+    return(FALSE)
+  }
+
+  if (is.null(fit_spec$cov_shrink_diag)) {
+    return(FALSE)
+  }
+
+  TRUE
+}
+
+fit_annual_mc_models <- function(annual_yields, mats, lambdas, cutoffs, curves, reference,
+                                 fit_spec, seed = NULL) {
+  if (!mc_fit_spec_ready(fit_spec)) {
+    stop("fit_spec must include xt_smooth, smoother (if xt_smooth = TRUE), and cov_shrink_diag before running mc_fit_end().")
+  }
+
+  if (!is.null(seed)) {
+    set.seed(seed)
+  }
+
+  setNames(lapply(annual_yields, function(yield_window) {
+    mc_fit_end(
+      yields = yield_window,
+      lambdas = lambdas,
+      cutoffs = cutoffs,
+      reference = reference,
+      curves = curves,
+      mats = mats,
+      X_trunc = fit_spec$x_trunc,
+      Xt_smooth = fit_spec$xt_smooth,
+      smoother = fit_spec$smoother,
+      CR_S0_shrink_diag = fit_spec$cov_shrink_diag
+    )
+  }), names(annual_yields))
+}
+
+extract_annual_mc_estimates <- function(annual_mc_fits, component = c("curve", "tenor")) {
+  component <- match.arg(component)
+
+  setNames(lapply(annual_mc_fits, function(fit_obj) {
+    fit_obj[[component]] %>%
+      dplyr::mutate(time = as.Date(time)) %>%
+      dplyr::arrange(time)
+  }), names(annual_mc_fits))
+}
+
+bind_metric_component <- function(metric_list, component) {
+  dplyr::bind_rows(lapply(metric_list, `[[`, component))
+}
+
+compute_curve_metrics <- function(actual_annual_panels, fitted_annual_panels, model_name) {
+  error_summary(
+    bind_annual_errors(actual_annual_panels, fitted_annual_panels),
+    model_name = model_name
+  )$by_curve_tenor
+}
+
+score_mc_shrink_grid <- function(shrink_grid, annual_yields, annual_actual_panels, mats, lambdas,
+                                 cutoffs, curves, reference, base_spec, seed = NULL) {
+  purrr::map_dfr(shrink_grid, function(shrink_value) {
+    fit_spec <- utils::modifyList(base_spec, list(cov_shrink_diag = shrink_value))
+
+    mc_fits <- fit_annual_mc_models(
+      annual_yields = annual_yields,
+      mats = mats,
+      lambdas = lambdas,
+      cutoffs = cutoffs,
+      curves = curves,
+      reference = reference,
+      fit_spec = fit_spec,
+      seed = seed
+    )
+
+    mc_curve_estimates <- extract_annual_mc_estimates(mc_fits, component = "curve")
+    mc_errors <- bind_annual_errors(annual_actual_panels, mc_curve_estimates)
+    mc_metrics <- error_summary(mc_errors, "mc_end")
+
+    tibble::tibble(
+      cov_shrink_diag = shrink_value,
+      rmse = mc_metrics$overall$rmse,
+      mae = mc_metrics$overall$mae
+    )
+  }) %>%
+    dplyr::arrange(rmse, mae, cov_shrink_diag)
+}
 ```
 
 ```{r fit-models}
 fit_seed <- 999
+dly_reference <- "usa"
 
 annual_actual_panels <- setNames(lapply(annual_yields, build_curve_panel, curves = curves), names(annual_yields))
 
+```
+
+```{r fit-baseline-curves}
+annual_baseline_fits <- fit_annual_baseline_models(
+  annual_yields = annual_yields,
+  mats = mats,
+  lambdas = lambdas,
+  curves = curves,
+  seed = fit_seed
+)
+
+annual_baseline_estimates <- extract_annual_baseline_estimates(annual_baseline_fits, curves)
+```
+
+```{r fit-dly-curves}
 dly_annual_fits <- fit_annual_dly_models(
   annual_yields = annual_yields,
   mats = mats,
   lambdas = lambdas,
   curves = curves,
-  reference = "usa",
+  reference = dly_reference,
   seed = fit_seed
 )
 
-annual_dns_estimates <- extract_annual_dns_estimates(dly_annual_fits, curves)
-annual_dly_raw_estimates <- extract_annual_dly_estimates(dly_annual_fits, curves, component = "raw")
-annual_dly_global_estimates <- extract_annual_dly_estimates(dly_annual_fits, curves, component = "global")
-annual_dly_idio_estimates <- extract_annual_dly_estimates(dly_annual_fits, curves, component = "idiosyncratic")
-
+annual_dly_estimates <- extract_annual_dly_estimates(dly_annual_fits, curves, component = "global")
 dly_in <- dly_annual_fits[["2010"]]
 ```
 
-```{r dly-sanity}
-dly_raw_panel <- build_curve_panel(annual_dly_raw_estimates[["2010"]], curves)
-dly_global_panel <- build_curve_panel(annual_dly_global_estimates[["2010"]], curves)
-dly_idio_panel <- build_curve_panel(annual_dly_idio_estimates[["2010"]], curves)
+```{r fit-mc-end-curves}
+mc_shrink_search_spec <- list(
+  x_trunc = TRUE,
+  xt_smooth = FALSE,
+  smoother = NULL,
+  cov_shrink_diag = NULL
+)
+
+mc_cov_shrink_grid <- seq(0, 1, by = 0.1)
+
+mc_shrink_grid_results <- score_mc_shrink_grid(
+  shrink_grid = mc_cov_shrink_grid,
+  annual_yields = annual_yields,
+  annual_actual_panels = annual_actual_panels,
+  mats = mats,
+  lambdas = lambdas,
+  cutoffs = cutoffs,
+  curves = curves,
+  reference = dly_reference,
+  base_spec = mc_shrink_search_spec,
+  seed = fit_seed
+)
+
+mc_optimal_cov_shrink_diag <- mc_shrink_grid_results$cov_shrink_diag[[1]]
+
+mc_run_spec <- utils::modifyList(
+  mc_shrink_search_spec,
+  list(cov_shrink_diag = mc_optimal_cov_shrink_diag)
+)
+
+mc_annual_fits <- fit_annual_mc_models(
+  annual_yields = annual_yields,
+  mats = mats,
+  lambdas = lambdas,
+  cutoffs = cutoffs,
+  curves = curves,
+  reference = dly_reference,
+  fit_spec = mc_run_spec,
+  seed = fit_seed
+)
+
+annual_mc_curve_estimates <- extract_annual_mc_estimates(mc_annual_fits, component = "curve")
 ```
 
-```{r dly-factor-summary}
-dly_lambda_table <- purrr::imap_dfr(dly_annual_fits, function(fit_obj, year_label) {
-  tibble::tibble(
-    year = as.integer(year_label),
-    curve = names(fit_obj$lambdas),
-    lambda = unname(fit_obj$lambdas),
-    level_loading = unname(fit_obj$factor_models$level$loading[names(fit_obj$lambdas)]),
-    level_rsq = unname(fit_obj$factor_models$level$r_squared[names(fit_obj$lambdas)]),
-    slope_loading = unname(fit_obj$factor_models$slope$loading[names(fit_obj$lambdas)]),
-    slope_rsq = unname(fit_obj$factor_models$slope$r_squared[names(fit_obj$lambdas)])
-  )
-})
+```{r mc-end-spec}
+mc_run_status <- tibble::tibble(
+  xt_smooth = as.character(mc_run_spec$xt_smooth),
+  smoother = if (is.null(mc_run_spec$smoother)) "none" else mc_run_spec$smoother,
+  cov_shrink_diag = as.character(mc_run_spec$cov_shrink_diag),
+  ready_to_run = mc_fit_spec_ready(mc_run_spec)
+)
 
-dly_lambda_table
+mc_run_status
 ```
 
-```{r in-sample-metrics}
-dly_raw_errors <- bind_annual_errors(annual_actual_panels, lapply(annual_dly_raw_estimates, build_curve_panel, curves = curves))
-dly_global_errors <- bind_annual_errors(annual_actual_panels, lapply(annual_dly_global_estimates, build_curve_panel, curves = curves))
+```{r mc-shrink-grid-results}
+mc_shrink_grid_results
+```
 
-dly_raw_metrics <- error_summary(dly_raw_errors, "dly_raw")
-dly_global_metrics <- error_summary(dly_global_errors, "dly_global")
+```{r curve-metrics}
+baseline_curve_metrics <- compute_curve_metrics(
+  actual_annual_panels = annual_actual_panels,
+  fitted_annual_panels = lapply(annual_baseline_estimates, build_curve_panel, curves = curves),
+  model_name = "baseline"
+)
 
-overall_metrics <- dplyr::bind_rows(
-  dly_raw_metrics$overall,
-  dly_global_metrics$overall
+dly_curve_metrics <- compute_curve_metrics(
+  actual_annual_panels = annual_actual_panels,
+  fitted_annual_panels = lapply(annual_dly_estimates, build_curve_panel, curves = curves),
+  model_name = "dly"
+)
+
+mc_end_curve_metrics <- compute_curve_metrics(
+  actual_annual_panels = annual_actual_panels,
+  fitted_annual_panels = annual_mc_curve_estimates,
+  model_name = "mc_end"
 )
 
 curve_metrics <- dplyr::bind_rows(
-  dly_raw_metrics$by_curve,
-  dly_global_metrics$by_curve
-)
-
-maturity_metrics <- dplyr::bind_rows(
-  dly_raw_metrics$by_maturity,
-  dly_global_metrics$by_maturity
+  baseline_curve_metrics,
+  dly_curve_metrics,
+  mc_end_curve_metrics
 )
 
 curve_metric_table <- curve_metrics %>%
-  dplyr::select(model, curve, rmse, mae) %>%
+  dplyr::select(model, curve, tenor, rmse, mae) %>%
   tidyr::pivot_wider(
     names_from = model,
     values_from = c(rmse, mae),
     names_glue = "{model}_{.value}"
   ) %>%
-  dplyr::arrange(curve)
+  dplyr::arrange(curve, match(tenor, as.character(mats)))
 
 curve_metric_table
 ```
 
-```{r overall-plot}
-ggplot2::ggplot(overall_metrics, ggplot2::aes(x = model, y = rmse, fill = model)) +
-  ggplot2::geom_col(width = 0.7) +
-  ggplot2::theme_minimal() +
-  ggplot2::theme(legend.position = "none") +
-  ggplot2::labs(title = "Overall In-Sample RMSE", x = NULL, y = "RMSE")
-```
-
-```{r curve-plot}
-ggplot2::ggplot(curve_metrics, ggplot2::aes(x = curve, y = rmse, color = model, group = model)) +
-  ggplot2::geom_point(size = 2) +
-  ggplot2::geom_line() +
-  ggplot2::theme_minimal() +
-  ggplot2::labs(title = "In-Sample RMSE by Curve", x = "Curve", y = "RMSE")
-```
-
-```{r maturity-plot}
-ggplot2::ggplot(maturity_metrics, ggplot2::aes(x = maturity, y = rmse, color = model, group = model)) +
-  ggplot2::geom_point(size = 2) +
-  ggplot2::geom_line() +
-  ggplot2::theme_minimal() +
-  ggplot2::labs(title = "In-Sample RMSE by Maturity", x = "Maturity", y = "RMSE")
-```
-
 ```{r dly-global-factors}
 global_factor_df <- tibble::tibble(
-  time = as.Date(annual_dly_raw_estimates[["2010"]][["usa"]]$time),
+  time = as.Date(dly_in$single_curve[[dly_reference]]$time),
   level = dly_in$global_factors$level$factor,
   slope = dly_in$global_factors$slope$factor
 )
@@ -306,4 +450,8 @@ ggplot2::ggplot(global_factor_df, ggplot2::aes(x = time)) +
   ggplot2::geom_line(ggplot2::aes(y = slope, color = "Slope")) +
   ggplot2::theme_minimal() +
   ggplot2::labs(title = "Extracted DLY Global Factors", x = NULL, y = "Factor value", color = NULL)
+
+lapply(mc_annual_fits[["2010"]]$BS0, function(x) {
+  min(x$B)
+})
 ```

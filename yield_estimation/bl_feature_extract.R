@@ -23,14 +23,6 @@ blmc_VAR <- function(blsc_list, reference, curves) {
   return(cross_curve_beta)
 }
 
-blmc_identity_sigma <- function(curves, mats) {
-  ## test function for methodological verification  
-  M = length(mats) 
-  D = length(curves) 
-  identity_sigma <- diag(M * D)
-  return(identity_sigma) 
-}
-
 blmc_ECM <- function(cc_betas, estim = "ML", type = "eigen", alpha = 0.1) {
   lag_opt <- max(VARselect(cc_betas, type = "const")$selection["SC(n)"], 2)
   vecm_unrestricted <- VECM(cc_betas, lag = lag_opt - 1, estim = estim, include = "const")

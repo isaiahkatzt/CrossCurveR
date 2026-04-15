@@ -289,10 +289,8 @@ synthetic_mc_fit <- mc_fit_end(
   X_trunc = FALSE,
   Xt_smooth = FALSE,
   smoother = "rm",
-  COV_TEST = FALSE,
   CR_maxiter = 500,
   CR_tol = 1e-6
 )
 ```
-
 

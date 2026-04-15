@@ -59,7 +59,7 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
                        knot_count=5, k_count=9, k_pass=3, hp_lambda=1600, henderson_k=13,
                        CR_maxiter=1000, CR_tol=1e-8, CR_Binit=NULL, CR_S0init=NULL, CR_S0_shrink_diag=0,
                        CR_verb=FALSE, CR_term=TRUE, 
-                       curves, mats, COV_TEST = FALSE) {
+                       curves, mats) {
   ## full endogenous covariate fit 
   
   ## build maturity x tenor strings 
@@ -113,15 +113,6 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
   
   sqrt_sigma_t <- full_sigma_t$sqrt
   sqrt_inv_sigma_t <- full_sigma_t$inverse
-  
-  if (COV_TEST){
-    print("covariance testing mode")
-    idm <- blmc_identity_sigma(curves, mats) 
-    N <- nrow(Xt)
-    full_sigma_t <- lapply(seq(1:N), function(n) idm)
-    sqrt_sigma_t <- lapply(seq(1:N), function(n) idm)
-    sqrt_inv_sigma_t <- lapply(seq(1:N), function(n) idm)
-  }
   
   ## breve components 
   yb <- bln_YB(pY[['py']], sqrt_inv_sigma_t) 
