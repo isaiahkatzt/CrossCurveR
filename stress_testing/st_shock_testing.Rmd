@@ -1,0 +1,95 @@
+---
+title: "st_shock_testing"
+author: "Isaiah Katz"
+date: "2026-04-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+load_crosscurveR <- function() {
+  project_files <- c(
+    "packages.R",
+    "core_formatting.R",
+    "yield_estimation/curve_reformat.R",
+    "yield_estimation/matrix_helpers.R",
+    "yield_estimation/cr_core_estim.R",
+    "yield_estimation/cr_eval.R",
+    "yield_estimation/bl_single_curve.R",
+    "yield_estimation/dly_mcm.R",
+    "yield_estimation/bl_feature_extract.R",
+    "yield_estimation/bl_normalize.R",
+    "yield_estimation/bl_cross_estimation.R",
+    "stress_testing/st_build_shock.R"
+  )
+
+  invisible(lapply(project_files, function(path) {
+    sys.source(here::here(path), envir = .GlobalEnv)
+  }))
+}
+
+load_crosscurveR()
+```
+
+```{r}
+curve_files <- list(
+  usa = "usa-bs.csv",
+  gbr = "gbr-bs.csv",
+  jpn = "jpn-bs.csv",
+  cad = "cad-bs.csv",
+  ger = "ger-bs.csv", 
+  fra = "fra-bs.csv"
+)
+
+curves <- names(curve_files)
+mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360)
+
+start_date <- as.Date("2010-01-01")
+end_date <- as.Date("2020-12-31")
+lambdas <- seq(0.01, 0.15, by = 0.005)
+cutoffs <- c(4, 8)
+ref = "usa"
+
+yields <- lapply(curve_files, function(file_name) {
+  read.csv(here::here("reconstructed_data", file_name), stringsAsFactors = FALSE)
+})
+
+yields <- lapply(yields, function(curve_df) {
+  curve_df %>%
+    dplyr::filter(
+      as.Date(time) >= start_date,
+      as.Date(time) <= end_date
+    )
+})
+
+## truncated yields: window only 
+years <- 2010:2020
+
+annual_yields <- setNames(lapply(years, function(year) {
+  lapply(yields, function(curve_df) {
+    curve_df %>%
+      dplyr::filter(format(as.Date(time), "%Y") == as.character(year))
+  })
+}), years)
+
+```
+
+```{r}
+set.seed(999) 
+
+year2015 <- annual_yields[["2015"]]
+dly2015 <- dly_fit(yields = year2015, mats = mats, lambdas = lambdas, reference = ref)
+mce2015 <- mc_fit_end(yields = year2015, mats = mats, lambdas = lambdas, curves = names(year2015), cutoffs = cutoffs, reference = ref, 
+                      X_trunc = TRUE, Xt_smooth = FALSE, CR_S0_shrink_diag = 0.4)
+
+nsf_test <- setNames(lapply(mce2015$ns_factor, function(x) x[['NSbetas']]), names(yields))
+```
+
+```{r}
+shock_test <- st_build_shock_matrix(curves = names(yields), model_factors = c("L", "S", "C"), 
+                                    shock_curves = c("usa"), shock_factors = c("L", "S"), magnitude = c(0.1,0.2))
+shock_build <- st_additive(curves = names(yields), curve_dns_factor = nsf_test, shock_curves = c("usa"), 
+                           shock_factors = c("C"), shock_magnitude = c(10))
+```
+

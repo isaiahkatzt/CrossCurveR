@@ -142,7 +142,9 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
     curveECM=cc_ci_features[['cc_ecm']], 
     BS0=cc_BS0_feature, 
     Xt=Xt,
-    W=W))  
+    W=W, 
+    ns_factor=bl_yields[['betas']])
+    )  
 }
 
 mc_fit_exo <- function(yields, lambdas, cutoffs, reference, Xt, X_normalize=TRUE,

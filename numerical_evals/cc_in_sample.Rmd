@@ -437,21 +437,3 @@ curve_metric_table <- curve_metrics %>%
 
 curve_metric_table
 ```
-
-```{r dly-global-factors}
-global_factor_df <- tibble::tibble(
-  time = as.Date(dly_in$single_curve[[dly_reference]]$time),
-  level = dly_in$global_factors$level$factor,
-  slope = dly_in$global_factors$slope$factor
-)
-
-ggplot2::ggplot(global_factor_df, ggplot2::aes(x = time)) +
-  ggplot2::geom_line(ggplot2::aes(y = level, color = "Level")) +
-  ggplot2::geom_line(ggplot2::aes(y = slope, color = "Slope")) +
-  ggplot2::theme_minimal() +
-  ggplot2::labs(title = "Extracted DLY Global Factors", x = NULL, y = "Factor value", color = NULL)
-
-lapply(mc_annual_fits[["2010"]]$BS0, function(x) {
-  min(x$B)
-})
-```
