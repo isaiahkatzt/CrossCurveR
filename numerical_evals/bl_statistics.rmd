@@ -1,13 +1,29 @@
 ---
 title: "baseline curve statistics"
-author: "Isaiah Katz"
 date: "2026-04-04"
 output: html_document
 ---
 
 ```{r}
-library(here) 
+library(here)
 library(dplyr)
+library(purrr)
+library(vars)
+library(tsDyn)
+
+load_baseline_helpers <- function() {
+  project_files <- c(
+    "core_formatting.R",
+    "yield_estimation/bl_single_curve.R",
+    "yield_estimation/bl_feature_extract.R"
+  )
+
+  invisible(lapply(project_files, function(path) {
+    sys.source(here::here(path), envir = .GlobalEnv)
+  }))
+}
+
+load_baseline_helpers()
 
 raw_yields <- list(
   usa_r <- "usa-full.csv", 
@@ -31,7 +47,7 @@ curve_files <- list(
   aus = "aus-bs-ib.csv"
 )
 
-curves = c("usa", "gbr", "jpy", "cad", "ger", "fra", "itl", "aus")
+curves = c("usa", "gbr", "jpn", "cad", "ger", "fra", "itl", "aus")
 
 yields <- lapply(curve_files, function(x) {
   read.csv(here("reconstructed_data", x), stringsAsFactors = FALSE)
@@ -90,3 +106,101 @@ row.names(curve_summary_stats) <- NULL
 curve_summary_stats
 ```
 
+```{r}
+## annual pairwise cointegration ranks from DNS fits
+mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360)
+cutoffs <- c(4, 8)
+lambdas <- seq(0.01, 0.15, by = 0.005)
+pairwise_curves <- setdiff(names(curve_files), c("itl", "aus"))
+years <- 2010:2020
+curve_pairs <- combn(pairwise_curves, 2, simplify = FALSE)
+
+annual_pairwise_yields <- setNames(lapply(years, function(year) {
+  lapply(yields[pairwise_curves], function(curve_df) {
+    curve_df %>%
+      dplyr::filter(format(as.Date(time), "%Y") == as.character(year))
+  })
+}), years)
+
+annual_selected_lambdas <- purrr::imap(annual_pairwise_yields, function(year_yields, year_label) {
+  setNames(lapply(pairwise_curves, function(curve_name) {
+    lambda_grid_search(
+      lambda_grid = lambdas,
+      yields = year_yields[[curve_name]],
+      mats = mats
+    )
+  }), pairwise_curves)
+})
+
+annual_dns_fits <- setNames(lapply(names(annual_pairwise_yields), function(year_label) {
+  curve_fit_list <- setNames(lapply(pairwise_curves, function(curve_name) {
+    bl_single_curve(
+      lambda_select = annual_selected_lambdas[[year_label]][[curve_name]],
+      yields = annual_pairwise_yields[[year_label]][[curve_name]],
+      cutoffs = cutoffs,
+      mats = mats
+    )
+  }), pairwise_curves)
+
+  purrr::transpose(curve_fit_list)
+}), names(annual_pairwise_yields))
+
+annual_dns_betas <- purrr::imap(annual_dns_fits, function(fit_obj, year_label) {
+  setNames(lapply(pairwise_curves, function(curve_name) {
+    tibble::tibble(
+      time = annual_pairwise_yields[[year_label]][[curve_name]]$time,
+      L = fit_obj$betas[[curve_name]]$NSbetas[, 1],
+      S = fit_obj$betas[[curve_name]]$NSbetas[, 2],
+      C = fit_obj$betas[[curve_name]]$NSbetas[, 3]
+    )
+  }), pairwise_curves)
+})
+
+fit_pairwise_cointegration <- function(blsc_list, curve_pair,
+                                       estim = "ML", type = "eigen", alpha = 0.1) {
+  curve_1 <- curve_pair[[1]]
+  curve_2 <- curve_pair[[2]]
+
+  pairwise_var <- blmc_VAR(
+    blsc_list = blsc_list,
+    reference = curve_1,
+    curves = c(curve_1, curve_2)
+  )[[curve_2]]
+
+  pairwise_ecm <- tryCatch(
+    blmc_ECM(cc_betas = pairwise_var, estim = estim, type = type, alpha = alpha),
+    error = function(e) {
+      list(rank = NA_integer_, error = conditionMessage(e))
+    }
+  )
+
+  tibble::tibble(
+    curve_1 = curve_1,
+    curve_2 = curve_2,
+    cointegration_rank = pairwise_ecm$rank,
+    error = if (!is.null(pairwise_ecm$error)) pairwise_ecm$error else NA_character_
+  )
+}
+
+annual_pairwise_cointegration_ranks <- purrr::imap_dfr(annual_dns_fits, function(fit_obj, year_label) {
+  purrr::map_dfr(curve_pairs, fit_pairwise_cointegration, blsc_list = fit_obj) %>%
+    dplyr::mutate(year = as.integer(year_label), .before = 1)
+})
+
+annual_pairwise_cointegration_ranks
+
+coint_avg <- annual_pairwise_cointegration_ranks %>%
+  dplyr::select(-error) %>%  # explicitly drop the error column
+  mutate(
+    curve_a = pmin(curve_1, curve_2),
+    curve_b = pmax(curve_1, curve_2)
+  ) %>%
+  group_by(curve_a, curve_b) %>%
+  summarise(
+    avg_cointegration_rank = mean(cointegration_rank, na.rm = TRUE),
+    n_obs = n(),
+    .groups = "drop"
+  )
+
+coint_avg %>% dplyr::arrange(avg_cointegration_rank)
+```

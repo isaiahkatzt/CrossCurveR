@@ -82,3 +82,41 @@ test_that("dly_fit preserves exact two-factor fits and additive decomposition id
   raw_resid_norm <- max(abs(unlist(dly_model$residuals$raw)))
   expect_lt(raw_resid_norm, 1e-6)
 })
+
+test_that("dly_fit_from_single_curve rebuilds the same DLY outputs from baseline single-curve fits", {
+  fixture <- make_dly_fixture()
+  dly_model <- dly_fit(
+    yields = fixture$yields,
+    mats = fixture_mats,
+    lambdas = c(0.2, 0.35, 0.5),
+    curves = names(fixture$yields),
+    reference = "usa"
+  )
+
+  rebuilt_model <- dly_fit_from_single_curve(
+    dly_sc = dly_model$single_curve,
+    actual_yields = fixture$yields,
+    curves = dly_model$curves,
+    reference = dly_model$reference,
+    center = dly_model$center,
+    scale. = dly_model$scale.,
+    mats = dly_model$mats
+  )
+
+  expect_equal(rebuilt_model$curves, dly_model$curves)
+  expect_equal(rebuilt_model$mats, dly_model$mats)
+
+  for (curve in names(fixture$yields)) {
+    expect_equal(rebuilt_model$country_betas$raw[[curve]], dly_model$country_betas$raw[[curve]], tolerance = 1e-8)
+    expect_equal(
+      as.matrix(rebuilt_model$yields$raw[[curve]][, -1, drop = FALSE]),
+      as.matrix(dly_model$yields$raw[[curve]][, -1, drop = FALSE]),
+      tolerance = 1e-8
+    )
+    expect_equal(
+      as.matrix(rebuilt_model$yields$global[[curve]][, -1, drop = FALSE]),
+      as.matrix(dly_model$yields$global[[curve]][, -1, drop = FALSE]),
+      tolerance = 1e-8
+    )
+  }
+})

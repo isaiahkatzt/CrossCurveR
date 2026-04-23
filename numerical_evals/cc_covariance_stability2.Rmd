@@ -1,6 +1,5 @@
 ---
 title: "cc_covariance_stability2"
-author: "Isaiah Katz"
 date: "2026-04-11"
 output: html_document
 ---
@@ -551,9 +550,9 @@ cc_fit_2010 <- mc_fit_end(
   curves = curves,
   mats = mats,
   X_trunc = TRUE,
-  Xt_smooth = FALSE ,
+  Xt_smooth = FALSE,
   smoother = "hp",
-  CR_S0_shrink_diag=0.5
+  CR_S0_shrink_diag = 0.5
 )
 
 plot(cc_fit_2010$curve$jpn.01Y, type = 'l', ylim=c(-4,4))

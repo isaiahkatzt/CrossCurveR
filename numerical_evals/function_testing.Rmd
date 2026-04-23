@@ -1,6 +1,5 @@
 ---
 title: "function_testing"
-author: "Isaiah Katz"
 date: "2025-07-05"
 output: html_document
 ---

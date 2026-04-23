@@ -176,21 +176,19 @@ dly_curve_residuals <- function(actual_yields, fitted_yields, curves = names(act
   }), curves)
 }
 
-dly_fit <- function(yields, mats,
-                    lambdas = seq(from = 0.001, to = 1, length.out = 100),
-                    curves = names(yields),
-                    reference = curves[[1]],
-                    center = TRUE,
-                    scale. = FALSE) {
+dly_fit_from_single_curve <- function(dly_sc, actual_yields = NULL,
+                                      curves = names(dly_sc),
+                                      reference = curves[[1]],
+                                      center = TRUE,
+                                      scale. = FALSE,
+                                      mats = NULL) {
   if (is.null(curves)) {
-    curves <- paste0("curve", seq_along(yields))
+    curves <- names(dly_sc)
   }
 
   if (!reference %in% curves) {
     stop("reference must be one of the curve names supplied in curves.")
   }
-
-  dly_sc <- dly_all_sc(lambdas = lambdas, yields = yields, mats = mats, curves = curves)
 
   level_factor <- dly_group_factor(dly_sc, curves = curves, latent = "L")
   slope_factor <- dly_group_factor(dly_sc, curves = curves, latent = "S")
@@ -209,9 +207,26 @@ dly_fit <- function(yields, mats,
   global_yields <- dly_curve_yields(dly_sc, level_model$fitted, slope_model$fitted, curves)
   idio_yields <- dly_curve_yields(dly_sc, level_model$residual, slope_model$residual, curves)
 
+  if (is.null(actual_yields)) {
+    actual_yields <- raw_yields
+  }
+
+  if (is.null(mats)) {
+    mats <- unique(unlist(lapply(raw_yields[curves], function(curve_df) {
+      numeric_mats <- suppressWarnings(vapply(colnames(curve_df)[-1], function(x) {
+        12 * matname_to_numeric(sub("^X", "", x))
+      }, numeric(1)))
+      numeric_mats[!is.na(numeric_mats)]
+    })))
+    mats <- sort(as.numeric(mats))
+  }
+
   return(list(
     curves = curves,
     mats = mats,
+    reference = reference,
+    center = center,
+    scale. = scale.,
     lambdas = vapply(dly_sc, `[[`, numeric(1), "lambda"),
     single_curve = dly_sc,
     country_factors = list(
@@ -237,8 +252,31 @@ dly_fit <- function(yields, mats,
       idiosyncratic = idio_yields
     ),
     residuals = list(
-      raw = dly_curve_residuals(yields, raw_yields, curves),
-      global = dly_curve_residuals(yields, global_yields, curves)
+      raw = dly_curve_residuals(actual_yields, raw_yields, curves),
+      global = dly_curve_residuals(actual_yields, global_yields, curves)
     )
   ))
+}
+
+dly_fit <- function(yields, mats,
+                    lambdas = seq(from = 0.001, to = 1, length.out = 100),
+                    curves = names(yields),
+                    reference = curves[[1]],
+                    center = TRUE,
+                    scale. = FALSE) {
+  if (is.null(curves)) {
+    curves <- paste0("curve", seq_along(yields))
+  }
+
+  dly_sc <- dly_all_sc(lambdas = lambdas, yields = yields, mats = mats, curves = curves)
+
+  dly_fit_from_single_curve(
+    dly_sc = dly_sc,
+    actual_yields = yields,
+    curves = curves,
+    reference = reference,
+    center = center,
+    scale. = scale.,
+    mats = mats
+  )
 }

@@ -1,6 +1,5 @@
 ---
 title: "reconstruction_testing"
-author: "Isaiah Katz"
 date: "2025-11-14"
 output: html_document
 ---

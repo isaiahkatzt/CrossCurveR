@@ -1,6 +1,5 @@
 ---
 title: "cc_cov_stability"
-author: "Isaiah Katz"
 date: "2026-04-08"
 output: html_document
 ---

@@ -1,6 +1,5 @@
 ---
 title: "st_shock_testing"
-author: "Isaiah Katz"
 date: "2026-04-15"
 output: html_document
 ---
@@ -20,8 +19,7 @@ load_crosscurveR <- function() {
     "yield_estimation/dly_mcm.R",
     "yield_estimation/bl_feature_extract.R",
     "yield_estimation/bl_normalize.R",
-    "yield_estimation/bl_cross_estimation.R",
-    "stress_testing/st_build_shock.R"
+    "yield_estimation/bl_cross_estimation.R"
   )
 
   invisible(lapply(project_files, function(path) {
@@ -83,13 +81,8 @@ dly2015 <- dly_fit(yields = year2015, mats = mats, lambdas = lambdas, reference 
 mce2015 <- mc_fit_end(yields = year2015, mats = mats, lambdas = lambdas, curves = names(year2015), cutoffs = cutoffs, reference = ref, 
                       X_trunc = TRUE, Xt_smooth = FALSE, CR_S0_shrink_diag = 0.4)
 
-nsf_test <- setNames(lapply(mce2015$ns_factor, function(x) x[['NSbetas']]), names(yields))
 ```
 
 ```{r}
-shock_test <- st_build_shock_matrix(curves = names(yields), model_factors = c("L", "S", "C"), 
-                                    shock_curves = c("usa"), shock_factors = c("L", "S"), magnitude = c(0.1,0.2))
-shock_build <- st_additive(curves = names(yields), curve_dns_factor = nsf_test, shock_curves = c("usa"), 
-                           shock_factors = c("C"), shock_magnitude = c(10))
-```
 
+```

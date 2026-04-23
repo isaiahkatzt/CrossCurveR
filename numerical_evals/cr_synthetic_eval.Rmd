@@ -1,6 +1,5 @@
 ---
 title: "cr_synthetic_eval"
-author: "Isaiah Katz"
 date: "2026-04-10"
 output: html_document
 ---
@@ -293,4 +292,3 @@ synthetic_mc_fit <- mc_fit_end(
   CR_tol = 1e-6
 )
 ```
-

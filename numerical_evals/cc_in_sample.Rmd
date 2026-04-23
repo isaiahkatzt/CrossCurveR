@@ -1,6 +1,5 @@
 ---
 title: "cc_in_sample"
-author: "Isaiah Katz"
 date: "2026-04-13"
 output: html_document
 ---

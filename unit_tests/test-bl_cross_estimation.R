@@ -105,7 +105,10 @@ test_that("mc_fit_end assembles the expected top-level output structure", {
     mc_fit_end(yields, lambdas = c(0.1, 0.2), cutoffs = c(1, 1), reference = "usa", curves = fixture_curves, mats = c(1, 3))
   )
 
-  expect_equal(names(result), c("tenor", "curve", "sigma_JT", "curveECM", "BS0", "Xt"))
+  expect_equal(
+    names(result),
+    c("tenor", "curve", "sigma_JT", "curveECM", "BS0", "Xt", "W", "ns_factor")
+  )
   expect_s3_class(result$tenor, "data.frame")
   expect_equal(nrow(result$Xt), length(fake_time))
 })
@@ -157,7 +160,10 @@ test_that("mc_fit_exo assembles the expected top-level output structure", {
     mc_fit_exo(yields, lambdas = c(0.1, 0.2), cutoffs = c(1, 1), reference = "usa", Xt = Xt, curves = fixture_curves, mats = c(1, 3))
   )
 
-  expect_equal(names(result), c("tenor", "curve", "sigma_JT", "BS0", "Xt"))
+  expect_equal(
+    names(result),
+    c("tenor", "curve", "sigma_JT", "BS0", "Xt", "W")
+  )
   expect_s3_class(result$curve, "data.frame")
   expect_equal(ncol(result$Xt), 2)
 })

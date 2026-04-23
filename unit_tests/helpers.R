@@ -30,6 +30,8 @@ source_project_file(file.path(repo_root, "yield_estimation/dly_mcm.R"))
 source_project_file(file.path(repo_root, "yield_estimation/bl_feature_extract.R"))
 source_project_file(file.path(repo_root, "yield_estimation/bl_normalize.R"))
 source_project_file(file.path(repo_root, "yield_estimation/bl_cross_estimation.R"))
+source_project_file(file.path(repo_root, "stress_testing/st_build_shock.R"))
+source_project_file(file.path(repo_root, "stress_testing/st_fit_shock.R"))
 
 tol <- 1e-6
 fixture_mats <- c(1, 3, 6, 12, 24, 60)
