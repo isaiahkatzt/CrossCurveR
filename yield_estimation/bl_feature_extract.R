@@ -136,17 +136,42 @@ blcc_build_Wj <- function(curve_nsfit, mats){
   return(Wj = wj_full)
 }
 
-blcc_fe <- function(Xt, Wt, mats, covreg=zero_mean_covreg_em,
+blcc_fe <- function(Xt, Wt, mats, covreg = zero_mean_covreg_em,
                     init = "adaptive", max_iter = 1000, tol = 1e-10, S0 = NULL, B = NULL,
-                    S0_shrink_diag = 0, verb = FALSE, term = FALSE) {
+                    S0_shrink_diag = 0, verb = FALSE, term = FALSE,
+                    check_every = 1, use_loglik = TRUE, store_path = TRUE) {
   ## baseline cross-curve feature extraction
+  covreg_formals <- names(formals(covreg))
+
   BS0_list <- lapply(Wt, function(Wj) {
-    covreg(W=Wj, X=Xt, init = init, max_iter = max_iter, tol = tol, S0 = S0, B = B, 
-           ridge_S0=1e-8, ridge_X = 1e-10, S0_shrink_diag = S0_shrink_diag,
-           check_every=1, use_loglik=TRUE, verbose=FALSE, store_path=TRUE)
-           #verb = verb, term = term)
+    covreg_args <- list(
+      W = Wj,
+      X = Xt,
+      init = init,
+      max_iter = max_iter,
+      tol = tol,
+      S0 = S0,
+      B = B,
+      S0_shrink_diag = S0_shrink_diag
+    )
+
+    optional_args <- list(
+      ridge_S0 = 1e-8,
+      ridge_X = 1e-10,
+      check_every = check_every,
+      use_loglik = use_loglik,
+      verbose = verb,
+      store_path = store_path,
+      term = term
+    )
+
+    for (arg_name in intersect(names(optional_args), covreg_formals)) {
+      covreg_args[[arg_name]] <- optional_args[[arg_name]]
+    }
+
+    do.call(covreg, covreg_args)
   })
-  return(BS0_list) 
+  return(BS0_list)
 }
 
 sigma_jt_optim <- function(BS0j, x) {

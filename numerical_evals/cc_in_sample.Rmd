@@ -130,7 +130,7 @@ extract_annual_baseline_estimates <- function(annual_baseline_fits, curves) {
 }
 
 extract_annual_dly_estimates <- function(annual_dly_fits, curves,
-                                         component = c("raw", "global", "idiosyncratic")) {
+                                         component = c("raw", "global", "idiosyncratic", "dislocation_propagated")) {
   component <- match.arg(component)
 
   setNames(lapply(annual_dly_fits, function(fit_obj) {
@@ -337,7 +337,11 @@ dly_annual_fits <- fit_annual_dly_models(
   seed = fit_seed
 )
 
-annual_dly_estimates <- extract_annual_dly_estimates(dly_annual_fits, curves, component = "global")
+annual_dly_estimates <- extract_annual_dly_estimates(
+  dly_annual_fits,
+  curves,
+  component = "dislocation_propagated"
+)
 dly_in <- dly_annual_fits[["2010"]]
 ```
 

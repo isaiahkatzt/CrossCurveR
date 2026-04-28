@@ -1,0 +1,522 @@
+---
+title: "Tontine Stress Test: Multi-Year Ladders"
+date: "2026-04-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Purpose
+
+This notebook extends the tontine bond-ladder application from annual 1Y ZCB
+rungs to overlapping 2Y and 5Y ZCB rungs. The longer maturities keep existing
+holdings exposed to rate moves after purchase, so the notebook separates
+hold-to-maturity purchase economics from mark-to-market shock losses on
+already-owned bonds.
+
+```{r libraries}
+library(here)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(scales)
+library(tibble)
+library(vars)
+library(tsDyn)
+library(Matrix)
+
+sys.source(here::here("applications", "tontine_helpers.R"), envir = .GlobalEnv)
+tontine_source_project()
+```
+
+```{r configuration}
+curve_files <- list(
+  usa = "usa-bs.csv",
+  gbr = "gbr-bs.csv",
+  jpn = "jpn-bs.csv",
+  ger = "ger-bs.csv"
+)
+
+curves <- names(curve_files)
+reference_curve <- "usa"
+
+mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360)
+mat_names <- tontine_mat_names(mats)
+
+data_start_date <- as.Date("2010-01-01")
+data_end_date <- as.Date("2021-12-31")
+lookback_years <- 1
+
+lambdas <- seq(0.01, 0.15, by = 0.005)
+cutoffs <- c(4, 8)
+fit_seed <- 999
+
+mce_baseline_controls <- list(
+  ECM_alpha = 0.2,
+  X_trunc = TRUE,
+  Xt_smooth = FALSE,
+  smoother = NULL,
+  CR_S0_shrink_diag = 0.4,
+  CR_check_every = 10,
+  CR_use_loglik = FALSE,
+  CR_store_path = FALSE
+)
+
+mce_shock_controls <- list(
+  reuse_ECM = TRUE,
+  reuse_BS0 = TRUE,
+  ECM_fallback = "baseline",
+  anchor_shock_curves = FALSE
+)
+
+N_members <- 1000
+target_total_ladder_par_per_member <- 100000
+total_target_par <- N_members * target_total_ladder_par_per_member
+population_seed <- fit_seed
+q_full <- c(
+  0.013404, 0.014795, 0.016280, 0.017595, 0.019527,
+  0.021506, 0.023614, 0.025473, 0.027789, 0.030319
+)
+
+maturity_specs <- list(
+  `2Y` = list(bond_maturity_years = 2, purchase_years = 2011:2019),
+  `5Y` = list(bond_maturity_years = 5, purchase_years = 2011:2016)
+)
+mtm_valuation_years <- 2015:2020
+model_purchase_years <- sort(unique(c(
+  unlist(lapply(maturity_specs, `[[`, "purchase_years")),
+  mtm_valuation_years
+)))
+
+baseline_model_names <- c("Observed", "DNS", "DLY", "MCE")
+shock_model_names <- c("DNS", "DLY", "MCE")
+```
+
+```{r data}
+yields <- tontine_read_yields(
+  curve_files = curve_files,
+  start_date = data_start_date,
+  end_date = data_end_date
+)
+```
+
+```{r valuation-windows}
+valuation_windows <- tontine_build_valuation_windows(
+  yields = yields,
+  reference_curve = reference_curve,
+  purchase_years = model_purchase_years,
+  lookback_years = lookback_years
+)
+```
+
+```{r ladder-schedules}
+build_multiyr_schedule <- function(spec, maturity_label) {
+  purchase_years <- spec$purchase_years
+  target_rung_par_per_member <- target_total_ladder_par_per_member / length(purchase_years)
+  q <- q_full[seq_along(purchase_years)]
+  population_simulation <- tontine_simulate_population(
+    N_members = N_members,
+    q = q,
+    seed = population_seed + spec$bond_maturity_years
+  )
+
+  tontine_build_bond_ladder_schedule(
+    yields = yields,
+    reference_curve = reference_curve,
+    purchase_years = purchase_years,
+    curves = curves,
+    total_target_par = total_target_par,
+    q = q,
+    population_simulation = population_simulation,
+    target_rung_par_per_member = target_rung_par_per_member,
+    bond_maturity_years = spec$bond_maturity_years
+  ) %>%
+    dplyr::mutate(ladder_maturity = maturity_label)
+}
+
+ladder_schedules <- purrr::imap(maturity_specs, build_multiyr_schedule)
+```
+
+```{r baseline-models}
+set.seed(fit_seed)
+
+baseline_curve_models <- tontine_fit_rolling_baseline_curve_models(
+  yields = yields,
+  valuation_windows = valuation_windows,
+  curves = curves,
+  mats = mats,
+  mat_names = mat_names,
+  lambdas = lambdas,
+  cutoffs = cutoffs,
+  reference_curve = reference_curve,
+  mce_controls = mce_baseline_controls,
+  include_models = baseline_model_names,
+  fit_seed = fit_seed
+)
+```
+
+```{r baseline-valuations}
+tag_valuation <- function(valuation, maturity_label) {
+  valuation$country_holdings <- valuation$country_holdings %>%
+    dplyr::mutate(ladder_maturity = maturity_label)
+  valuation$cash_accounts <- valuation$cash_accounts %>%
+    dplyr::mutate(ladder_maturity = maturity_label)
+  valuation
+}
+
+baseline_valuations <- purrr::imap(ladder_schedules, function(ladder_schedule, maturity_label) {
+  tontine_price_baseline_models(
+    baseline_curve_models = baseline_curve_models,
+    ladder_schedule = ladder_schedule,
+    mat_names = mat_names
+  ) %>%
+    tag_valuation(maturity_label)
+})
+```
+
+## Shock Example
+
+The rate-pain diagnostic uses a USA `+100 BPS` level-factor shock beginning at
+the 2015 purchase date and linearly decaying to zero at the 2020 purchase date.
+Only mark-to-market losses on already-owned 2Y and 5Y holdings are reported
+here.
+
+```{r shock-specs}
+shock_examples <- list(
+  usa_l_100bps_decay_2015_2020 = list(
+    label = "USA L +100 BPS linear decay 2015-2020",
+    shock_profile = "linear_decay",
+    shock_start_year = 2015,
+    shock_start_anchor = "purchase_date",
+    shock_end_year = 2020,
+    shock_end_anchor = "purchase_date",
+    shock_curves = "usa",
+    shock_factors = "L",
+    shock_start_magnitude = 1.0,
+    shock_end_magnitude = 0.0,
+    shock_type = "additive"
+  )
+)
+```
+
+```{r shock-models}
+shock_curve_models <- purrr::imap(shock_examples, function(shock_spec, shock_key) {
+  tontine_fit_rolling_shocked_curve_models(
+    yields = yields,
+    valuation_windows = valuation_windows,
+    curves = curves,
+    mats = mats,
+    mat_names = mat_names,
+    lambdas = lambdas,
+    cutoffs = cutoffs,
+    reference_curve = reference_curve,
+    shock_spec = shock_spec,
+    mce_controls = mce_baseline_controls,
+    mce_shock_controls = mce_shock_controls,
+    include_models = shock_model_names,
+    fit_seed = fit_seed
+  )
+})
+```
+
+```{r baseline-summaries}
+tontine_summarize_rungs <- function(valuation) {
+  valuation$country_holdings %>%
+    dplyr::group_by(
+      ladder_maturity, model, scenario, scenario_type, shock_label,
+      rung_id, purchase_year, bond_maturity_years
+    ) %>%
+    dplyr::summarise(
+      average_zero_rate = mean(zero_rate),
+      total_purchase_cost = sum(purchase_cost),
+      total_maturity_proceeds = sum(maturity_proceeds),
+      .groups = "drop"
+    ) %>%
+    dplyr::left_join(
+      valuation$cash_accounts %>%
+        dplyr::select(
+          ladder_maturity, model, scenario, rung_id,
+          cash_end, rung_profit_loss, cumulative_profit_loss
+        ),
+      by = c("ladder_maturity", "model", "scenario", "rung_id")
+    )
+}
+
+baseline_rung_summary <- purrr::imap_dfr(baseline_valuations, function(valuation, maturity_label) {
+  tontine_summarize_rungs(valuation)
+})
+
+baseline_rung_summary
+```
+
+## Mark-to-Market Shock Loss
+
+The mark-to-market section values only holdings that were purchased before each
+annual shock valuation date and have not yet matured. This is the channel where
+a positive rate shock lowers the value of already-owned longer-duration bonds.
+
+```{r mtm-shock}
+mtm_valuation_schedule <- valuation_windows %>%
+  dplyr::filter(.data$purchase_year %in% mtm_valuation_years) %>%
+  dplyr::transmute(
+    valuation_year = .data$purchase_year,
+    valuation_date = .data$purchase_date
+  )
+
+mtm_shock_deltas <- purrr::imap_dfr(baseline_valuations, function(valuation, maturity_label) {
+  purrr::map2_dfr(
+    mtm_valuation_schedule$valuation_year,
+    mtm_valuation_schedule$valuation_date,
+    function(valuation_year, valuation_date) {
+      tontine_compare_mtm_shock(
+        baseline_holdings = valuation$country_holdings,
+        baseline_curve_models = baseline_curve_models,
+        shocked_curve_models = shock_curve_models$usa_l_100bps_decay_2015_2020,
+        mats = mats,
+        mat_names = mat_names,
+        valuation_date = valuation_date,
+        shock_label = shock_examples$usa_l_100bps_decay_2015_2020$label
+      ) %>%
+        dplyr::mutate(
+          ladder_maturity = maturity_label,
+          valuation_year = valuation_year
+        )
+    }
+  )
+})
+
+mtm_shock_summary <- mtm_shock_deltas %>%
+  dplyr::group_by(ladder_maturity, model, valuation_year, valuation_date, purchase_year, shock_label) %>%
+  dplyr::summarise(
+    baseline_mtm_value = sum(mtm_value_baseline),
+    shocked_mtm_value = sum(mtm_value_shocked),
+    mtm_value_delta = sum(mtm_value_delta),
+    mtm_value_delta_pct = mtm_value_delta / baseline_mtm_value,
+    average_zero_rate_delta = mean(mtm_zero_rate_delta),
+    .groups = "drop"
+  )
+
+mtm_total_by_valuation_year <- mtm_shock_summary %>%
+  dplyr::group_by(ladder_maturity, model, valuation_year, valuation_date, shock_label) %>%
+  dplyr::summarise(
+    baseline_mtm_value = sum(baseline_mtm_value),
+    shocked_mtm_value = sum(shocked_mtm_value),
+    total_mtm_loss = sum(mtm_value_delta),
+    total_mtm_loss_pct = total_mtm_loss / baseline_mtm_value,
+    .groups = "drop"
+  )
+
+mtm_cumulative_cohort_summary <- mtm_shock_summary %>%
+  dplyr::arrange(ladder_maturity, model, valuation_year, purchase_year) %>%
+  dplyr::group_by(ladder_maturity, model, valuation_year, valuation_date, shock_label) %>%
+  dplyr::mutate(
+    cumulative_mtm_loss = cumsum(mtm_value_delta),
+    cumulative_baseline_mtm_value = cumsum(baseline_mtm_value),
+    cumulative_mtm_loss_pct = cumulative_mtm_loss / cumulative_baseline_mtm_value
+  ) %>%
+  dplyr::ungroup()
+
+mtm_country_summary <- mtm_shock_deltas %>%
+  dplyr::group_by(ladder_maturity, model, valuation_year, valuation_date, country, shock_label) %>%
+  dplyr::summarise(
+    baseline_mtm_value = sum(mtm_value_baseline),
+    shocked_mtm_value = sum(mtm_value_shocked),
+    country_mtm_loss = sum(mtm_value_delta),
+    country_mtm_loss_pct = country_mtm_loss / baseline_mtm_value,
+    average_zero_rate_delta = mean(mtm_zero_rate_delta),
+    .groups = "drop"
+  )
+
+mtm_5y_gain_diagnostic <- mtm_shock_deltas %>%
+  dplyr::filter(.data$ladder_maturity == "5Y", .data$valuation_year %in% 2015:2016) %>%
+  dplyr::group_by(model, valuation_year, country) %>%
+  dplyr::summarise(
+    baseline_mtm_value = sum(mtm_value_baseline),
+    shocked_mtm_value = sum(mtm_value_shocked),
+    mtm_value_delta = sum(mtm_value_delta),
+    average_zero_rate_delta = mean(mtm_zero_rate_delta),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    diagnostic_note = dplyr::case_when(
+      mtm_value_delta > 0 & average_zero_rate_delta < 0 ~
+        "MTM gain is driven by model-implied lower shocked remaining rates.",
+      mtm_value_delta > 0 & average_zero_rate_delta >= 0 ~
+        "MTM gain occurs despite higher average rates; inspect country/maturity mix.",
+      TRUE ~ "MTM loss is directionally consistent with higher shocked remaining rates."
+    )
+  ) %>%
+  dplyr::arrange(valuation_year, model, country)
+
+mtm_shock_summary
+mtm_cumulative_cohort_summary
+mtm_total_by_valuation_year
+mtm_country_summary
+mtm_5y_gain_diagnostic
+```
+
+## Visualizations
+
+```{r visualization-data}
+model_levels <- c("Observed", "DNS", "DLY", "MCE")
+model_palette <- c(
+  Observed = "#7E6A9E",
+  DNS = "#4C78A8",
+  DLY = "#59A14F",
+  MCE = "#C94C4C"
+)
+
+baseline_plot_data <- baseline_rung_summary %>%
+  dplyr::mutate(model = factor(model, levels = model_levels))
+
+mtm_plot_data <- mtm_shock_summary %>%
+  dplyr::mutate(model = factor(model, levels = model_levels))
+
+mtm_cumulative_plot_data <- mtm_cumulative_cohort_summary %>%
+  dplyr::mutate(model = factor(model, levels = model_levels))
+
+mtm_total_plot_data <- mtm_total_by_valuation_year %>%
+  dplyr::mutate(model = factor(model, levels = model_levels))
+
+mtm_country_plot_data <- mtm_country_summary %>%
+  dplyr::mutate(model = factor(model, levels = model_levels))
+
+build_multiyr_baseline_plot <- function(plot_data, maturity_label) {
+  ggplot2::ggplot(
+    plot_data %>% dplyr::filter(.data$ladder_maturity == maturity_label),
+    ggplot2::aes(x = purchase_year, y = rung_profit_loss, color = model)
+  ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+    ggplot2::geom_line(linewidth = 0.8) +
+    ggplot2::geom_point(size = 1.8) +
+    ggplot2::scale_color_manual(values = model_palette, drop = FALSE) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::labs(
+      title = paste("Baseline Bond P/L by Rung:", maturity_label),
+      x = "Purchase Year",
+      y = "Rung Bond P/L",
+      color = "Model"
+    ) +
+    ggplot2::theme_minimal()
+}
+
+build_multiyr_mtm_cumulative_cohort_plot <- function(plot_data, maturity_label, valuation_year_value) {
+  ggplot2::ggplot(
+    plot_data %>%
+      dplyr::filter(
+        .data$ladder_maturity == maturity_label,
+        .data$valuation_year == valuation_year_value
+      ),
+    ggplot2::aes(
+      x = factor(purchase_year),
+      y = cumulative_mtm_loss,
+      fill = model
+    )
+  ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+    ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.78), width = 0.7) +
+    ggplot2::scale_fill_manual(values = model_palette, drop = FALSE) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::labs(
+      title = paste("Cumulative MTM Loss by Rung:", maturity_label, valuation_year_value),
+      x = "Original Purchase Year",
+      y = "Cumulative MTM Loss",
+      fill = "Model"
+    ) +
+    ggplot2::theme_minimal()
+}
+
+build_multiyr_mtm_total_plot <- function(plot_data, maturity_label) {
+  ggplot2::ggplot(
+    plot_data %>% dplyr::filter(.data$ladder_maturity == maturity_label),
+    ggplot2::aes(x = valuation_year, y = total_mtm_loss, color = model)
+  ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+    ggplot2::geom_line(linewidth = 0.8) +
+    ggplot2::geom_point(size = 1.8) +
+    ggplot2::scale_color_manual(values = model_palette, drop = FALSE) +
+    ggplot2::scale_x_continuous(breaks = mtm_valuation_years) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::labs(
+      title = paste("Total MTM Loss by Shock Valuation Year:", maturity_label),
+      x = "Shock Valuation Year",
+      y = "Total MTM Loss",
+      color = "Model"
+    ) +
+    ggplot2::theme_minimal()
+}
+
+build_multiyr_country_mtm_plot <- function(plot_data, maturity_label, country_name) {
+  ggplot2::ggplot(
+    plot_data %>%
+      dplyr::filter(
+        .data$ladder_maturity == maturity_label,
+        .data$country == country_name
+      ),
+    ggplot2::aes(x = valuation_year, y = country_mtm_loss, color = model)
+  ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+    ggplot2::geom_line(linewidth = 0.8) +
+    ggplot2::geom_point(size = 1.8) +
+    ggplot2::scale_color_manual(values = model_palette, drop = FALSE) +
+    ggplot2::scale_x_continuous(breaks = mtm_valuation_years) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::labs(
+      title = paste("Country MTM Loss:", maturity_label, toupper(country_name)),
+      x = "Shock Valuation Year",
+      y = "Country MTM Loss",
+      color = "Model"
+    ) +
+    ggplot2::theme_minimal()
+}
+
+mtm_cumulative_cohort_plots <- setNames(lapply(names(maturity_specs), function(maturity_label) {
+  setNames(lapply(mtm_valuation_years, function(valuation_year_value) {
+    build_multiyr_mtm_cumulative_cohort_plot(
+      mtm_cumulative_plot_data,
+      maturity_label,
+      valuation_year_value
+    )
+  }), as.character(mtm_valuation_years))
+}), names(maturity_specs))
+
+mtm_country_plots <- setNames(lapply(names(maturity_specs), function(maturity_label) {
+  setNames(lapply(curves, function(country_name) {
+    build_multiyr_country_mtm_plot(mtm_country_plot_data, maturity_label, country_name)
+  }), curves)
+}), names(maturity_specs))
+```
+
+```{r plot-baseline-2y-rung-pl}
+build_multiyr_baseline_plot(baseline_plot_data, "2Y")
+```
+
+```{r plot-baseline-5y-rung-pl}
+build_multiyr_baseline_plot(baseline_plot_data, "5Y")
+```
+
+```{r plot-mtm-cumulative-cohort-loss-2y-2016}
+mtm_cumulative_cohort_plots$`2Y`$`2016`
+```
+
+```{r plot-mtm-cumulative-cohort-loss-5y-2016}
+mtm_cumulative_cohort_plots$`5Y`$`2016`
+```
+
+```{r plot-mtm-total-loss-2y}
+build_multiyr_mtm_total_plot(mtm_total_plot_data, "2Y")
+```
+
+```{r plot-mtm-total-loss-5y}
+build_multiyr_mtm_total_plot(mtm_total_plot_data, "5Y")
+```
+
+```{r plot-country-mtm-loss-2y-usa}
+mtm_country_plots$`2Y`$usa
+```
+
+```{r plot-country-mtm-loss-5y-usa}
+mtm_country_plots$`5Y`$usa
+```

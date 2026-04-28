@@ -114,8 +114,35 @@ st_warn_large_shocks <- function(shock_matrix) {
   }
 }
 
+st_resolve_shock_rows <- function(row_count, shock_window = NULL,
+                                  shock_window_position = c("first", "last")) {
+  shock_window_position <- match.arg(shock_window_position)
+
+  if (is.null(shock_window)) {
+    return(seq_len(row_count))
+  }
+
+  if (!is.numeric(shock_window) || length(shock_window) != 1 || is.na(shock_window) ||
+      shock_window <= 0 || shock_window %% 1 != 0) {
+    stop("`shock_window` must be NULL or a positive integer.")
+  }
+
+  shock_window <- as.integer(shock_window)
+
+  if (shock_window > row_count) {
+    stop("`shock_window` cannot exceed the number of available shock rows.")
+  }
+
+  if (shock_window_position == "first") {
+    return(seq_len(shock_window))
+  }
+
+  seq.int(from = row_count - shock_window + 1L, to = row_count)
+}
+
 st_additive <- function(curves, curve_dns_factor, shock_curves, shock_factors,
-                        shock_magnitude, shock_window = NULL) {
+                        shock_magnitude, shock_window = NULL,
+                        shock_window_position = c("first", "last")) {
   if (!is.list(curve_dns_factor) || length(curve_dns_factor) == 0) {
     stop("`curve_dns_factor` must be a non-empty list.")
   }
@@ -157,20 +184,11 @@ st_additive <- function(curves, curve_dns_factor, shock_curves, shock_factors,
       stop("Each named `curve_dns_factor` entry must correspond to a column in the shock matrix.")
     }
 
-    if (is.null(shock_window)) {
-      shock_rows <- seq_len(nrow(curve_factor_mat))
-    } else {
-      if (!is.numeric(shock_window) || length(shock_window) != 1 || is.na(shock_window) ||
-          shock_window <= 0 || shock_window %% 1 != 0) {
-        stop("`shock_window` must be NULL or a positive integer.")
-      }
-
-      if (shock_window > nrow(curve_factor_mat)) {
-        stop("`shock_window` cannot exceed the number of rows in any `curve_dns_factor` entry.")
-      }
-
-      shock_rows <- seq_len(as.integer(shock_window))
-    }
+    shock_rows <- st_resolve_shock_rows(
+      row_count = nrow(curve_factor_mat),
+      shock_window = shock_window,
+      shock_window_position = shock_window_position
+    )
 
     shocked_mat <- curve_factor_mat
     shocked_mat[shock_rows, ] <- sweep(
@@ -190,7 +208,8 @@ st_additive <- function(curves, curve_dns_factor, shock_curves, shock_factors,
 }
 
 st_multiplicative <- function(curves, curve_dns_factor, shock_curves, shock_factors,
-                              shock_magnitude, shock_window = NULL) {
+                              shock_magnitude, shock_window = NULL,
+                              shock_window_position = c("first", "last")) {
   if (!is.list(curve_dns_factor) || length(curve_dns_factor) == 0) {
     stop("`curve_dns_factor` must be a non-empty list.")
   }
@@ -233,20 +252,11 @@ st_multiplicative <- function(curves, curve_dns_factor, shock_curves, shock_fact
       stop("Each named `curve_dns_factor` entry must correspond to a column in the shock matrix.")
     }
 
-    if (is.null(shock_window)) {
-      shock_rows <- seq_len(nrow(curve_factor_mat))
-    } else {
-      if (!is.numeric(shock_window) || length(shock_window) != 1 || is.na(shock_window) ||
-          shock_window <= 0 || shock_window %% 1 != 0) {
-        stop("`shock_window` must be NULL or a positive integer.")
-      }
-
-      if (shock_window > nrow(curve_factor_mat)) {
-        stop("`shock_window` cannot exceed the number of rows in any `curve_dns_factor` entry.")
-      }
-
-      shock_rows <- seq_len(as.integer(shock_window))
-    }
+    shock_rows <- st_resolve_shock_rows(
+      row_count = nrow(curve_factor_mat),
+      shock_window = shock_window,
+      shock_window_position = shock_window_position
+    )
 
     shocked_mat <- curve_factor_mat
     shocked_mat[shock_rows, ] <- sweep(

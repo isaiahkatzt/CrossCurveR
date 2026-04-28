@@ -1,0 +1,769 @@
+---
+title: "Tontine Stress Test: 1-Year Ladder"
+date: "2026-04-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Purpose
+
+This notebook is the orchestration layer for tontine yield-curve stress testing.
+Reusable application logic lives in `applications/tontine_helpers.R`; model
+logic remains in `yield_estimation/` and `stress_testing/`.
+
+```{r libraries}
+library(here)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(scales)
+library(tibble)
+library(gridExtra)
+library(vars)
+library(tsDyn)
+library(Matrix)
+
+sys.source(here::here("applications", "tontine_helpers.R"), envir = .GlobalEnv)
+tontine_source_project()
+```
+
+```{r configuration}
+curve_files <- list(
+  usa = "usa-bs.csv",
+  gbr = "gbr-bs.csv",
+  jpn = "jpn-bs.csv",
+  ger = "ger-bs.csv"
+)
+
+curves <- names(curve_files)
+reference_curve <- "usa"
+
+mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360)
+mat_names <- tontine_mat_names(mats)
+
+data_start_date <- as.Date("2010-01-01")
+data_end_date <- as.Date("2021-12-31")
+lookback_years <- 1
+
+lambdas <- seq(0.01, 0.15, by = 0.005)
+cutoffs <- c(4, 8)
+fit_seed <- 999
+
+mce_baseline_controls <- list(
+  ECM_alpha = 0.2,
+  X_trunc = TRUE,
+  Xt_smooth = FALSE,
+  smoother = NULL,
+  CR_S0_shrink_diag = 0.4,
+  CR_check_every = 10,
+  CR_use_loglik = FALSE,
+  CR_store_path = FALSE
+)
+
+mce_shock_controls <- list(
+  reuse_ECM = TRUE,
+  reuse_BS0 = TRUE,
+  ECM_fallback = "baseline",
+  anchor_shock_curves = FALSE
+)
+
+purchase_years <- 2011:2020
+N_members <- 1000
+target_total_ladder_par_per_member <- 100000
+target_rung_par_per_member <- target_total_ladder_par_per_member / length(purchase_years)
+total_target_par <- N_members * target_total_ladder_par_per_member
+population_seed <- fit_seed
+q_full <- c(
+  0.013404, 0.014795, 0.016280, 0.017595, 0.019527,
+  0.021506, 0.023614, 0.025473, 0.027789, 0.030319
+)
+stopifnot(length(q_full) >= length(purchase_years))
+q <- q_full[seq_along(purchase_years)]
+
+baseline_model_names <- c("Observed", "DNS", "DLY", "MCE")
+shock_model_names <- c("DNS", "DLY", "MCE")
+```
+
+```{r population-simulation}
+population_simulation <- tontine_simulate_population(
+  N_members = N_members,
+  q = q,
+  seed = population_seed
+)
+```
+
+```{r data}
+yields <- tontine_read_yields(
+  curve_files = curve_files,
+  start_date = data_start_date,
+  end_date = data_end_date
+)
+```
+
+```{r valuation-windows}
+valuation_windows <- tontine_build_valuation_windows(
+  yields = yields,
+  reference_curve = reference_curve,
+  purchase_years = purchase_years,
+  lookback_years = lookback_years
+)
+```
+
+```{r ladder-schedule}
+ladder_schedule <- tontine_build_bond_ladder_schedule(
+  yields = yields,
+  reference_curve = reference_curve,
+  purchase_years = purchase_years,
+  curves = curves,
+  total_target_par = total_target_par,
+  q = q,
+  population_simulation = population_simulation,
+  target_rung_par_per_member = target_rung_par_per_member
+)
+```
+
+```{r baseline-models}
+set.seed(fit_seed)
+
+baseline_curve_models <- tontine_fit_rolling_baseline_curve_models(
+  yields = yields,
+  valuation_windows = valuation_windows,
+  curves = curves,
+  mats = mats,
+  mat_names = mat_names,
+  lambdas = lambdas,
+  cutoffs = cutoffs,
+  reference_curve = reference_curve,
+  mce_controls = mce_baseline_controls,
+  include_models = baseline_model_names,
+  fit_seed = fit_seed
+)
+```
+
+```{r baseline-valuation}
+baseline_valuation <- tontine_price_baseline_models(
+  baseline_curve_models = baseline_curve_models,
+  ladder_schedule = ladder_schedule,
+  mat_names = mat_names
+)
+
+baseline_country_holdings <- baseline_valuation$country_holdings
+baseline_cash_accounts <- baseline_valuation$cash_accounts
+baseline_model_summary <- tontine_summarize_baseline_ladder(baseline_valuation)
+```
+
+## Shock Examples
+
+The first two examples target the 2015 purchase rung. With the current one-year
+rolling setup, that means the valuation window ending on the first observed
+2015 reference-curve date. Those shocks are applied over the full rows supplied
+to that window's model fit; all other rungs use their unshocked rolling fits.
+
+The third example is a cross-window shock profile. It begins at the 2015
+purchase date with a `-1.0` USA level-factor shock and then linearly decays to
+zero at the 2020 purchase date. Each rolling model fit receives whatever portion
+of that calendar shock profile overlaps its annual valuation window.
+
+- `USA L -100 BPS`: additive level-factor shock of `-1.0` to the USA curve.
+- `GBR + GER L -100 BPS`: simultaneous additive level-factor shock of `-1.0`
+  to the GBR and GER curves, while USA remains the reference curve.
+- `USA L -100 BPS linear decay 2015-2020`: additive level-factor shock of
+  `-1.0` to the USA curve beginning at the 2015 purchase date, linearly decaying
+  to `0.0` by the 2020 purchase date.
+
+These shock valuations are reported only for `DNS`, `DLY`, and
+`MCE`. The observed curves remain a baseline diagnostic; directly shocking the
+observed curves is not an informative model comparison.
+
+```{r shock-specs}
+shock_examples <- list(
+  usa_l_neg100bps_2015 = list(
+    label = "2015 USA L -100 BPS",
+    shock_year = 2015,
+    shock_curves = "usa",
+    shock_factors = "L",
+    shock_magnitude = -1.0,
+    shock_type = "additive",
+    shock_window = NULL,
+    shock_window_position = "first"
+  ),
+  gbr_ger_l_neg100bps_2015 = list(
+    label = "2015 GBR+GER L -100 BPS",
+    shock_year = 2015,
+    shock_curves = c("gbr", "ger"),
+    shock_factors = "L",
+    shock_magnitude = -1.0,
+    shock_type = "additive",
+    shock_window = NULL,
+    shock_window_position = "first"
+  ),
+  usa_l_neg100bps_decay_2015_2020 = list(
+    label = "USA L -100 BPS linear decay 2015-2020",
+    shock_profile = "linear_decay",
+    shock_start_year = 2015,
+    shock_start_anchor = "purchase_date",
+    shock_end_year = 2020,
+    shock_end_anchor = "purchase_date",
+    shock_curves = "usa",
+    shock_factors = "L",
+    shock_start_magnitude = -1.0,
+    shock_end_magnitude = 0.0,
+    shock_type = "additive"
+  )
+)
+```
+
+```{r shock-valuations}
+shock_curve_models <- purrr::imap(shock_examples, function(shock_spec, shock_key) {
+  tontine_fit_rolling_shocked_curve_models(
+    yields = yields,
+    valuation_windows = valuation_windows,
+    curves = curves,
+    mats = mats,
+    mat_names = mat_names,
+    lambdas = lambdas,
+    cutoffs = cutoffs,
+    reference_curve = reference_curve,
+    shock_spec = shock_spec,
+    mce_controls = mce_baseline_controls,
+    mce_shock_controls = mce_shock_controls,
+    include_models = shock_model_names,
+    fit_seed = fit_seed
+  )
+})
+
+shock_valuations <- purrr::imap(shock_curve_models, function(curve_models, shock_key) {
+  tontine_price_baseline_models(
+    baseline_curve_models = curve_models,
+    ladder_schedule = ladder_schedule,
+    mat_names = mat_names,
+    scenario_type = "shock",
+    scenario_name_prefix = shock_examples[[shock_key]]$label,
+    shock_label = shock_examples[[shock_key]]$label,
+    initial_cash = baseline_valuation$initial_cash
+  )
+})
+```
+
+```{r shock-summaries}
+tontine_summarize_rungs <- function(valuation) {
+  valuation$country_holdings %>%
+    dplyr::group_by(model, scenario, scenario_type, shock_label, rung_id, purchase_year) %>%
+    dplyr::summarise(
+      average_1y_zero_rate = mean(zero_rate_1y),
+      total_purchase_cost = sum(purchase_cost),
+      total_maturity_proceeds = sum(maturity_proceeds),
+      .groups = "drop"
+    ) %>%
+    dplyr::left_join(
+      valuation$cash_accounts %>%
+        dplyr::select(model, scenario, rung_id, cash_end, rung_profit_loss, cumulative_profit_loss),
+      by = c("model", "scenario", "rung_id")
+    )
+}
+
+baseline_rung_summary <- tontine_summarize_rungs(baseline_valuation)
+
+shock_model_summaries <- purrr::imap_dfr(shock_valuations, function(valuation, shock_key) {
+  shock_label <- shock_examples[[shock_key]]$label
+  tontine_summarize_baseline_ladder(valuation) %>%
+    dplyr::mutate(shock_key = shock_key, shock_label = shock_label)
+})
+
+shock_rung_summaries <- purrr::imap_dfr(shock_valuations, function(valuation, shock_key) {
+  tontine_summarize_rungs(valuation) %>%
+    dplyr::mutate(shock_key = shock_key)
+})
+
+shock_affected_years <- function(shock_spec) {
+  if (identical(shock_spec$shock_profile, "linear_decay")) {
+    return(seq.int(shock_spec$shock_start_year, shock_spec$shock_end_year))
+  }
+
+  shock_spec$shock_year
+}
+
+shock_affected_year_lookup <- purrr::imap_dfr(shock_examples, function(shock_spec, shock_key) {
+  tibble::tibble(
+    shock_key = shock_key,
+    purchase_year = shock_affected_years(shock_spec)
+  )
+})
+
+shock_rung_deltas <- shock_rung_summaries %>%
+  dplyr::left_join(
+    baseline_rung_summary %>%
+      dplyr::select(
+        model, rung_id, purchase_year,
+        baseline_average_1y_zero_rate = average_1y_zero_rate,
+        baseline_total_purchase_cost = total_purchase_cost,
+        baseline_cash_end = cash_end,
+        baseline_rung_profit_loss = rung_profit_loss
+      ),
+    by = c("model", "rung_id", "purchase_year")
+  ) %>%
+  dplyr::mutate(
+    delta_average_1y_zero_rate = average_1y_zero_rate - baseline_average_1y_zero_rate,
+    delta_total_purchase_cost = total_purchase_cost - baseline_total_purchase_cost,
+    delta_cash_end = cash_end - baseline_cash_end,
+    delta_rung_profit_loss = rung_profit_loss - baseline_rung_profit_loss
+  ) %>%
+  dplyr::distinct(shock_key, shock_label, model, rung_id, purchase_year, .keep_all = TRUE)
+
+shock_rung_deltas_affected <- shock_rung_deltas %>%
+  dplyr::inner_join(
+    shock_affected_year_lookup,
+    by = c("shock_key", "purchase_year")
+  )
+
+shock_rung_summaries_affected <- shock_rung_summaries %>%
+  dplyr::inner_join(
+    shock_affected_year_lookup,
+    by = c("shock_key", "purchase_year")
+  ) %>%
+  dplyr::distinct(shock_key, shock_label, model, rung_id, purchase_year, .keep_all = TRUE)
+
+shock_model_summaries
+
+shock_rung_summaries_affected %>%
+  dplyr::filter(purchase_year == 2015)
+
+shock_rung_deltas_affected %>%
+  dplyr::filter(purchase_year == 2015)
+```
+
+```{r summaries}
+valuation_windows
+baseline_model_summary
+baseline_cash_accounts
+```
+
+```{r diagnostics}
+baseline_country_holdings %>%
+  dplyr::group_by(model, rung_id) %>%
+  dplyr::summarise(
+    average_1y_zero_rate = mean(zero_rate_1y),
+    total_purchase_cost = sum(purchase_cost),
+    total_maturity_proceeds = sum(maturity_proceeds),
+    .groups = "drop"
+  )
+```
+
+## Visualizations
+
+```{r visualization-data}
+model_levels <- c("Observed", "DNS", "DLY", "MCE")
+model_palette <- c(
+  Observed = "#7E6A9E",
+  DNS = "#4C78A8",
+  DLY = "#59A14F",
+  MCE = "#C94C4C"
+)
+shock_model_palette <- model_palette[shock_model_names]
+scenario_levels <- c(
+  "Baseline",
+  "2015 USA L -100 BPS",
+  "2015 GBR+GER L -100 BPS",
+  "USA L -100 BPS linear decay 2015-2020"
+)
+scenario_palette <- c(
+  Baseline = "#8A8A8A",
+  `2015 USA L -100 BPS` = "#59A14F",
+  `2015 GBR+GER L -100 BPS` = "#4C78A8",
+  `USA L -100 BPS linear decay 2015-2020` = "#C94C4C"
+)
+
+baseline_plot_data <- baseline_rung_summary %>%
+  dplyr::mutate(
+    model = factor(model, levels = model_levels),
+    scenario_label = "Baseline"
+  )
+
+shock_plot_data <- shock_rung_summaries_affected %>%
+  dplyr::filter(.data$model %in% shock_model_names) %>%
+  dplyr::group_by(shock_key, shock_label, model, purchase_year) %>%
+  dplyr::summarise(
+    rung_profit_loss = mean(rung_profit_loss),
+    cumulative_profit_loss = mean(cumulative_profit_loss),
+    cash_end = mean(cash_end),
+    total_purchase_cost = mean(total_purchase_cost),
+    total_maturity_proceeds = mean(total_maturity_proceeds),
+    average_1y_zero_rate = mean(average_1y_zero_rate),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    model = factor(model, levels = shock_model_names),
+    scenario_label = shock_label
+  )
+
+shock_delta_plot_data <- shock_rung_deltas_affected %>%
+  dplyr::filter(.data$model %in% shock_model_names) %>%
+  dplyr::group_by(shock_key, shock_label, model, purchase_year) %>%
+  dplyr::summarise(
+    delta_average_1y_zero_rate = mean(delta_average_1y_zero_rate),
+    delta_total_purchase_cost = mean(delta_total_purchase_cost),
+    delta_cash_end = mean(delta_cash_end),
+    delta_rung_profit_loss = mean(delta_rung_profit_loss),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    model = factor(model, levels = shock_model_names),
+    scenario_label = shock_label
+  )
+
+ending_cash_plot_data <- dplyr::bind_rows(
+  baseline_model_summary %>%
+    dplyr::filter(.data$model %in% shock_model_names) %>%
+    dplyr::mutate(scenario_label = "Baseline"),
+  shock_model_summaries %>%
+    dplyr::mutate(scenario_label = shock_label)
+) %>%
+  dplyr::mutate(
+    model = factor(model, levels = shock_model_names),
+    scenario_label = factor(scenario_label, levels = scenario_levels)
+  )
+
+terminal_cash_uplift_data <- shock_model_summaries %>%
+  dplyr::left_join(
+    baseline_model_summary %>%
+      dplyr::select(model, baseline_ending_cash_balance = ending_cash_balance),
+    by = "model"
+  ) %>%
+  dplyr::mutate(
+    model = factor(model, levels = shock_model_names),
+    scenario_label = factor(shock_label, levels = scenario_levels),
+    terminal_cash_uplift = ending_cash_balance - baseline_ending_cash_balance
+  )
+
+baseline_country_plot_data <- baseline_country_holdings %>%
+  dplyr::group_by(model, country, rung_id, purchase_year) %>%
+  dplyr::summarise(
+    country_purchase_cost = sum(purchase_cost),
+    country_maturity_proceeds = sum(maturity_proceeds),
+    country_bond_profit_loss = country_maturity_proceeds - country_purchase_cost,
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(model = factor(model, levels = model_levels))
+
+shock_country_summaries <- purrr::imap_dfr(shock_valuations, function(valuation, shock_key) {
+  valuation$country_holdings %>%
+    dplyr::group_by(model, shock_label, country, rung_id, purchase_year) %>%
+    dplyr::summarise(
+      country_purchase_cost = sum(purchase_cost),
+      country_maturity_proceeds = sum(maturity_proceeds),
+      country_bond_profit_loss = country_maturity_proceeds - country_purchase_cost,
+      .groups = "drop"
+    ) %>%
+    dplyr::mutate(shock_key = shock_key)
+})
+
+shock_country_delta_plot_data <- shock_country_summaries %>%
+  dplyr::left_join(
+    baseline_country_plot_data %>%
+      dplyr::select(
+        model, country, rung_id, purchase_year,
+        baseline_country_bond_profit_loss = country_bond_profit_loss
+      ),
+    by = c("model", "country", "rung_id", "purchase_year")
+  ) %>%
+  dplyr::mutate(
+    delta_country_bond_profit_loss =
+      country_bond_profit_loss - baseline_country_bond_profit_loss
+  ) %>%
+  dplyr::inner_join(
+    shock_affected_year_lookup,
+    by = c("shock_key", "purchase_year")
+  ) %>%
+  dplyr::filter(.data$model %in% shock_model_names) %>%
+  dplyr::group_by(shock_key, shock_label, model, country, purchase_year) %>%
+  dplyr::summarise(
+    country_bond_profit_loss = mean(country_bond_profit_loss),
+    baseline_country_bond_profit_loss = mean(baseline_country_bond_profit_loss),
+    delta_country_bond_profit_loss = mean(delta_country_bond_profit_loss),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    model = factor(model, levels = shock_model_names),
+    scenario_label = shock_label
+  )
+
+build_1yr_shock_rung_plot <- function(plot_data, scenario_label) {
+  filtered_plot_data <- plot_data %>%
+    dplyr::filter(.data$scenario_label == .env$scenario_label)
+
+  out <- ggplot2::ggplot(
+    filtered_plot_data,
+    ggplot2::aes(x = purchase_year, y = rung_profit_loss, color = model)
+  ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+    ggplot2::geom_point(size = 1.8) +
+    ggplot2::scale_color_manual(values = shock_model_palette, drop = TRUE) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::scale_x_continuous(breaks = purchase_years) +
+    ggplot2::labs(
+      title = paste("Shocked Bond P/L by Rung:", scenario_label),
+      x = "Purchase Year",
+      y = "Rung Bond P/L",
+      color = "Model"
+    ) +
+    ggplot2::theme_minimal()
+
+  if (dplyr::n_distinct(filtered_plot_data$purchase_year) > 1) {
+    out <- out + ggplot2::geom_line(linewidth = 0.8)
+  }
+
+  out
+}
+
+build_1yr_shock_delta_plot <- function(plot_data, scenario_label) {
+  filtered_plot_data <- plot_data %>%
+    dplyr::filter(.data$scenario_label == .env$scenario_label)
+
+  out <- ggplot2::ggplot(
+    filtered_plot_data,
+    ggplot2::aes(x = purchase_year, y = delta_rung_profit_loss, color = model)
+  ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+    ggplot2::geom_point(size = 1.8) +
+    ggplot2::scale_color_manual(values = shock_model_palette, drop = TRUE) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::scale_x_continuous(breaks = purchase_years) +
+    ggplot2::labs(
+      title = paste("Incremental Shock Effect on Rung Bond P/L:", scenario_label),
+      x = "Purchase Year",
+      y = "Change in Rung Bond P/L",
+      color = "Model"
+    ) +
+    ggplot2::theme_minimal()
+
+  if (dplyr::n_distinct(filtered_plot_data$purchase_year) > 1) {
+    out <- out + ggplot2::geom_line(linewidth = 0.8)
+  }
+
+  out
+}
+
+build_1yr_terminal_cash_plot <- function(plot_data, scenario_label) {
+  ggplot2::ggplot(
+    plot_data %>% dplyr::filter(.data$scenario_label == .env$scenario_label),
+    ggplot2::aes(x = model, y = terminal_cash_uplift, fill = model)
+  ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+    ggplot2::geom_col(width = 0.7, show.legend = FALSE) +
+    ggplot2::scale_fill_manual(values = shock_model_palette, drop = TRUE) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::labs(
+      title = paste("Terminal Cash Uplift Versus Baseline:", scenario_label),
+      x = "Model",
+      y = "Ending Cash Change"
+    ) +
+    ggplot2::theme_minimal()
+}
+
+build_1yr_country_baseline_plot <- function(plot_data, country_name) {
+  ggplot2::ggplot(
+    plot_data %>% dplyr::filter(.data$country == .env$country_name),
+    ggplot2::aes(x = purchase_year, y = country_bond_profit_loss, color = model)
+  ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+    ggplot2::geom_line(linewidth = 0.8) +
+    ggplot2::geom_point(size = 1.8) +
+    ggplot2::scale_color_manual(values = model_palette, drop = TRUE) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::scale_x_continuous(breaks = purchase_years) +
+    ggplot2::labs(
+      title = paste("Baseline Country Bond P/L:", toupper(country_name)),
+      x = "Purchase Year",
+      y = "Country Bond P/L",
+      color = "Model"
+    ) +
+    ggplot2::theme_minimal()
+}
+
+build_1yr_country_shock_delta_plot <- function(plot_data, scenario_label, country_name) {
+  filtered_plot_data <- plot_data %>%
+    dplyr::filter(
+      .data$scenario_label == .env$scenario_label,
+      .data$country == .env$country_name
+    )
+
+  out <- ggplot2::ggplot(
+    filtered_plot_data,
+    ggplot2::aes(x = purchase_year, y = delta_country_bond_profit_loss, color = model)
+  ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+    ggplot2::geom_point(size = 1.8) +
+    ggplot2::scale_color_manual(values = shock_model_palette, drop = TRUE) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::scale_x_continuous(breaks = purchase_years) +
+    ggplot2::labs(
+      title = paste("Country Shock Effect:", toupper(country_name), scenario_label),
+      x = "Purchase Year",
+      y = "Change in Country Bond P/L",
+      color = "Model"
+    ) +
+    ggplot2::theme_minimal()
+
+  if (dplyr::n_distinct(filtered_plot_data$purchase_year) > 1) {
+    out <- out + ggplot2::geom_line(linewidth = 0.8)
+  }
+
+  out
+}
+
+shock_scenario_labels <- vapply(shock_examples, `[[`, character(1), "label")
+
+terminal_cash_uplift_usa_plot <- build_1yr_terminal_cash_plot(
+  terminal_cash_uplift_data,
+  shock_scenario_labels[["usa_l_neg100bps_2015"]]
+)
+terminal_cash_uplift_gbr_ger_plot <- build_1yr_terminal_cash_plot(
+  terminal_cash_uplift_data,
+  shock_scenario_labels[["gbr_ger_l_neg100bps_2015"]]
+)
+terminal_cash_uplift_decay_plot <- build_1yr_terminal_cash_plot(
+  terminal_cash_uplift_data,
+  shock_scenario_labels[["usa_l_neg100bps_decay_2015_2020"]]
+)
+
+country_baseline_plots <- setNames(lapply(curves, function(country_name) {
+  build_1yr_country_baseline_plot(baseline_country_plot_data, country_name)
+}), curves)
+
+country_shock_delta_plots <- purrr::imap(shock_scenario_labels, function(scenario_label, shock_key) {
+  setNames(lapply(curves, function(country_name) {
+    build_1yr_country_shock_delta_plot(
+      shock_country_delta_plot_data,
+      scenario_label,
+      country_name
+    )
+  }), curves)
+})
+```
+
+```{r plot-baseline-rung-pl}
+ggplot2::ggplot(
+  baseline_plot_data,
+  ggplot2::aes(x = purchase_year, y = rung_profit_loss, color = model)
+) +
+  ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+  ggplot2::geom_line(linewidth = 0.8) +
+  ggplot2::geom_point(size = 1.8) +
+  ggplot2::scale_color_manual(values = model_palette, drop = TRUE) +
+  ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+  ggplot2::scale_x_continuous(breaks = purchase_years) +
+  ggplot2::labs(
+    title = "Baseline Bond P/L by Rung",
+    x = "Purchase Year",
+    y = "Rung Bond P/L",
+    color = "Model"
+  ) +
+  ggplot2::theme_minimal()
+```
+
+```{r plot-baseline-cumulative-pl}
+ggplot2::ggplot(
+  baseline_plot_data,
+  ggplot2::aes(x = purchase_year, y = cumulative_profit_loss, color = model)
+) +
+  ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+  ggplot2::geom_line(linewidth = 0.8) +
+  ggplot2::geom_point(size = 1.8) +
+  ggplot2::scale_color_manual(values = model_palette, drop = TRUE) +
+  ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+  ggplot2::scale_x_continuous(breaks = purchase_years) +
+  ggplot2::labs(
+    title = "Baseline Cumulative Bond P/L",
+    x = "Purchase Year",
+    y = "Cumulative Bond P/L",
+    color = "Model"
+  ) +
+  ggplot2::theme_minimal()
+```
+
+```{r plot-shock-rung-pl-usa}
+build_1yr_shock_rung_plot(shock_plot_data, shock_scenario_labels[["usa_l_neg100bps_2015"]])
+```
+
+```{r plot-shock-rung-pl-gbr-ger}
+build_1yr_shock_rung_plot(shock_plot_data, shock_scenario_labels[["gbr_ger_l_neg100bps_2015"]])
+```
+
+```{r plot-shock-rung-pl-decay}
+build_1yr_shock_rung_plot(shock_plot_data, shock_scenario_labels[["usa_l_neg100bps_decay_2015_2020"]])
+```
+
+```{r plot-shock-delta-rung-pl-usa}
+build_1yr_shock_delta_plot(shock_delta_plot_data, shock_scenario_labels[["usa_l_neg100bps_2015"]])
+```
+
+```{r plot-shock-delta-rung-pl-gbr-ger}
+build_1yr_shock_delta_plot(shock_delta_plot_data, shock_scenario_labels[["gbr_ger_l_neg100bps_2015"]])
+```
+
+```{r plot-shock-delta-rung-pl-decay}
+build_1yr_shock_delta_plot(shock_delta_plot_data, shock_scenario_labels[["usa_l_neg100bps_decay_2015_2020"]])
+```
+
+```{r plot-ending-cash}
+ggplot2::ggplot(
+  ending_cash_plot_data,
+  ggplot2::aes(x = model, y = ending_cash_balance, fill = scenario_label)
+) +
+  ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.78), width = 0.7) +
+  ggplot2::scale_fill_manual(
+    values = scenario_palette,
+    breaks = scenario_levels,
+    drop = FALSE
+  ) +
+  ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+  ggplot2::labs(
+    title = "Ending Cash Balance by Scenario",
+    x = "Model",
+    y = "Ending Cash Balance",
+    fill = "Scenario"
+  ) +
+  ggplot2::theme_minimal() +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 30, hjust = 1))
+```
+
+```{r plot-terminal-cash-uplift-usa}
+terminal_cash_uplift_usa_plot
+```
+
+```{r plot-terminal-cash-uplift-gbr-ger}
+terminal_cash_uplift_gbr_ger_plot
+```
+
+```{r plot-terminal-cash-uplift-decay}
+terminal_cash_uplift_decay_plot
+```
+
+```{r plot-terminal-cash-uplift-grid, fig.width=16, fig.height=4}
+gridExtra::grid.arrange(
+  terminal_cash_uplift_usa_plot,
+  terminal_cash_uplift_gbr_ger_plot,
+  terminal_cash_uplift_decay_plot,
+  nrow = 1,
+  ncol = 3
+)
+```
+
+```{r plot-country-baseline-usa}
+country_baseline_plots$usa
+```
+
+```{r plot-country-shock-delta-usa}
+country_shock_delta_plots$usa_l_neg100bps_2015$usa
+```
+
+```{r plot-country-shock-delta-gbr}
+country_shock_delta_plots$gbr_ger_l_neg100bps_2015$gbr
+```
+
+```{r exports, eval=FALSE}
+# TODO: write selected tables and artifacts to tmp/tontine/<run_id>/.
+```
