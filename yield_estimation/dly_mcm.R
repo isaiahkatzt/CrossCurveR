@@ -205,10 +205,21 @@ dly_static_fit_from_single_curve <- function(dly_sc, actual_yields = NULL,
   raw_betas <- dly_bind_betas(level_factor, slope_factor, curves)
   global_betas <- dly_bind_betas(level_model$fitted, slope_model$fitted, curves)
   idio_betas <- dly_bind_betas(level_model$residual, slope_model$residual, curves)
+  global_plus_idio_betas <- dly_bind_betas(
+    level_model$fitted + level_model$residual,
+    slope_model$fitted + slope_model$residual,
+    curves
+  )
 
   raw_yields <- dly_curve_yields(dly_sc, level_factor, slope_factor, curves)
   global_yields <- dly_curve_yields(dly_sc, level_model$fitted, slope_model$fitted, curves)
   idio_yields <- dly_curve_yields(dly_sc, level_model$residual, slope_model$residual, curves)
+  global_plus_idio_yields <- dly_curve_yields(
+    dly_sc,
+    level_model$fitted + level_model$residual,
+    slope_model$fitted + slope_model$residual,
+    curves
+  )
 
   if (is.null(actual_yields)) {
     actual_yields <- raw_yields
@@ -247,16 +258,23 @@ dly_static_fit_from_single_curve <- function(dly_sc, actual_yields = NULL,
     country_betas = list(
       raw = raw_betas,
       global = global_betas,
-      idiosyncratic = idio_betas
+      idiosyncratic = idio_betas,
+      global_plus_idiosyncratic = global_plus_idio_betas
     ),
     yields = list(
       raw = raw_yields,
       global = global_yields,
-      idiosyncratic = idio_yields
+      idiosyncratic = idio_yields,
+      global_plus_idiosyncratic = global_plus_idio_yields
     ),
     residuals = list(
       raw = dly_curve_residuals(actual_yields, raw_yields, curves),
-      global = dly_curve_residuals(actual_yields, global_yields, curves)
+      global = dly_curve_residuals(actual_yields, global_yields, curves),
+      global_plus_idiosyncratic = dly_curve_residuals(
+        actual_yields,
+        global_plus_idio_yields,
+        curves
+      )
     )
   ))
 }

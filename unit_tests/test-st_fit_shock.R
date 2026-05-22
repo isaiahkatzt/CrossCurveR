@@ -192,90 +192,6 @@ test_that("st_build_xt_state can fall back to baseline ECM when a refit yields n
   expect_match(result$cc_ci_features$ECM_fallback_reason, "No usable cointegration")
 })
 
-test_that("mc_fit_shock_from_baseline can anchor target shocked curves after finalization", {
-  baseline_state <- make_fake_shock_baseline()
-  mat_str <- sapply(fixture_mats, numeric_to_matname)
-  curve_cols <- as.vector(t(outer(fixture_curves, mat_str, paste, sep = ".")))
-  P <- bln_build_P(fixture_curves, fixture_mats)
-
-  make_curve_panel <- function(curve_values) {
-    panel <- data.frame(time = fixture_time, curve_values, check.names = FALSE)
-    colnames(panel) <- c("time", curve_cols)
-    panel
-  }
-
-  finalized_curve <- make_curve_panel(matrix(0, nrow = length(fixture_time), ncol = length(curve_cols)))
-  finalized_tenor <- data.frame(
-    time = fixture_time,
-    PY_full(finalized_curve[, -1, drop = FALSE], P)$py,
-    check.names = FALSE
-  )
-  baseline_curve <- make_curve_panel(matrix(10, nrow = length(fixture_time), ncol = length(curve_cols)))
-  baseline_tenor <- data.frame(
-    time = fixture_time,
-    PY_full(baseline_curve[, -1, drop = FALSE], P)$py,
-    check.names = FALSE
-  )
-  baseline_state$baseline_fit$curve <- baseline_curve
-  baseline_state$baseline_fit$tenor <- baseline_tenor
-
-  shocked_yields <- make_pair_yields()
-  shocked_yields$usa[, -1] <- shocked_yields$usa[, -1] + 1
-
-  shock_result <- with_temp_bindings(
-    list(
-      st_additive = function(curves, curve_dns_factor, ...) {
-        list(
-          shock_matrix = matrix(c(0.2, 0, NA, NA), nrow = 2, dimnames = list(c("L", "S"), curves)),
-          shocked_factors = curve_dns_factor
-        )
-      },
-      st_build_shocked_curve_state = function(single_curve_state, shocked_factors) {
-        list(
-          yields = shocked_yields,
-          bl_yields = list(),
-          phi_hat = single_curve_state$phi_hat,
-          W = single_curve_state$W,
-          ns_factor = shocked_factors
-        )
-      },
-      st_build_xt_state = function(...) list(
-        Xt = matrix(2, nrow = length(fixture_time), ncol = 1, dimnames = list(NULL, "gbr.r1")),
-        cc_ci_features = list(cc_ecm = list(gbr = list(rank = 1, Gmatrix = matrix(1, nrow = 1, ncol = 1))))
-      ),
-      st_finalize_shocked_fit = function(...) {
-        list(
-          tenor = finalized_tenor,
-          curve = finalized_curve,
-          sigma_JT = "shock_sigma",
-          Xt = matrix(2, nrow = length(fixture_time), ncol = 1),
-          W = baseline_state$single_curve_state$W
-        )
-      }
-    ),
-    mc_fit_shock_from_baseline(
-      baseline_state = baseline_state,
-      shock_curves = "usa",
-      shock_factors = "L",
-      shock_magnitude = 0.2,
-      anchor_shock_curves = TRUE
-    )
-  )
-
-  shock_delta <- shocked_yields$usa[, -1, drop = FALSE] - baseline_state$single_curve_state$yields$usa[, -1, drop = FALSE]
-  expected_curve <- finalized_curve
-  expected_curve[, paste0("usa.", mat_str)] <- baseline_curve[, paste0("usa.", mat_str), drop = FALSE] + shock_delta
-  expected_tenor <- data.frame(
-    time = fixture_time,
-    PY_full(expected_curve[, -1, drop = FALSE], P)$py,
-    check.names = FALSE
-  )
-
-  expect_equal(shock_result$shocked_curve, expected_curve)
-  expect_equal(shock_result$shocked_tenor, expected_tenor)
-  expect_equal(shock_result$shocked_curve[, paste0("gbr.", mat_str)], finalized_curve[, paste0("gbr.", mat_str)])
-})
-
 test_that("mc_fit_shock reuses a supplied baseline_state", {
   baseline_state <- make_fake_shock_baseline()
 
@@ -371,7 +287,7 @@ test_that("st_dns_shock_from_single_curve_state applies the requested factor sho
   expect_equal(result$shocked_factors$gbr, single_curve_state$ns_factor$gbr)
 })
 
-test_that("st_dly_shock_from_fit dynamically propagates a finite-window DLY shock", {
+test_that("st_dly_shock_from_fit_profile transmits shocks through the DLY global factor", {
   dly_fit_obj <- dly_fit(
     yields = make_pair_yields(),
     mats = fixture_mats,
@@ -382,13 +298,13 @@ test_that("st_dly_shock_from_fit dynamically propagates a finite-window DLY shoc
     scale. = FALSE
   )
 
-  result <- st_dly_shock_from_fit(
+  shock_profile <- rep(0, length(fixture_time))
+  shock_profile[1:5] <- 0.25
+  result <- st_dly_shock_from_fit_profile(
     dly_fit_obj = dly_fit_obj,
     shock_curves = "usa",
     shock_factors = "L",
-    shock_magnitude = 0.25,
-    shock_window = 5,
-    shock_window_position = "first"
+    shock_profile = shock_profile
   )
 
   expected_shocked_single_curve <- st_build_shocked_dly_single_curve(
@@ -416,43 +332,22 @@ test_that("st_dly_shock_from_fit dynamically propagates a finite-window DLY shoc
     global_factor = expected_global_slope,
     curves = fixture_curves
   )
-  expected_shock_residual <- st_dly_shock_residual_states(
-    raw_level_factor = expected_level_draw,
-    raw_slope_factor = expected_slope_draw,
-    fitted_level_factor = expected_shocked_level,
-    fitted_slope_factor = expected_shocked_slope,
-    curves = fixture_curves
-  )
-  expected_global_state <- st_dly_shock_global_path(
-    dly_fit_obj = dly_fit_obj,
-    shocked_global_level = expected_global_level,
-    shocked_global_slope = expected_global_slope,
-    shock_rows = shock_rows
-  )
-  expected_residual_state <- st_dly_shock_residual_path(
-    dly_fit_obj = dly_fit_obj,
-    global_path = expected_global_state,
-    shock_residual_states = expected_shock_residual,
-    shock_rows = shock_rows
-  )
-  expected_global_factor <- dly_country_global_factors(
-    level_global_factor = expected_global_state[, "L"],
-    slope_global_factor = expected_global_state[, "S"],
-    factor_models = dly_fit_obj$factor_models,
-    curves = fixture_curves
-  )
-  expected_residual_factor <- dly_unpack_country_state(
-    country_state_list = expected_residual_state,
-    curves = fixture_curves
-  )
-  expected_propagated_betas <- dly_bind_betas(
-    expected_global_factor$level + expected_residual_factor$level,
-    expected_global_factor$slope + expected_residual_factor$slope,
+  expected_level_residual <- dly_fit_obj$factor_models$level$residual[, fixture_curves]
+  expected_slope_residual <- dly_fit_obj$factor_models$slope$residual[, fixture_curves]
+  expected_level_residual[, "usa"] <-
+    dly_fit_obj$factor_models$level$residual[, "usa"] +
+    expected_level_draw[, "usa"] - dly_fit_obj$country_factors$level[, "usa"]
+  expected_slope_residual[, "usa"] <-
+    dly_fit_obj$factor_models$slope$residual[, "usa"] +
+    expected_slope_draw[, "usa"] - dly_fit_obj$country_factors$slope[, "usa"]
+  expected_global_plus_idio_level <- expected_shocked_level + expected_level_residual
+  expected_global_plus_idio_slope <- expected_shocked_slope + expected_slope_residual
+  expected_global_plus_idio_betas <- dly_bind_betas(
+    expected_global_plus_idio_level,
+    expected_global_plus_idio_slope,
     curves = fixture_curves
   )
 
-  expect_equal(result$shock_matrix["L", "usa"], 0.25)
-  expect_equal(result$shock_matrix["L", "gbr"], 0)
   expect_equal(as.matrix(result$shocked_factors$usa)[shock_rows, 1], dly_fit_obj$country_betas$raw$usa[shock_rows, "L"] + 0.25)
   expect_equal(as.matrix(result$shocked_factors$usa)[-shock_rows, 1], dly_fit_obj$country_betas$raw$usa[-shock_rows, "L"])
   expect_equal(unname(as.matrix(result$shocked_factors$gbr)), unname(dly_fit_obj$country_betas$raw$gbr))
@@ -461,148 +356,83 @@ test_that("st_dly_shock_from_fit dynamically propagates a finite-window DLY shoc
   expect_equal(result$fit$global_factors$slope$factor, expected_global_slope)
   expect_equal(result$fit$factor_models$level$loading, dly_fit_obj$factor_models$level$loading)
   expect_equal(result$fit$factor_models$slope$loading, dly_fit_obj$factor_models$slope$loading)
-  expect_equal(result$fit$country_betas$idiosyncratic$usa, dly_fit_obj$country_betas$idiosyncratic$usa)
+  expect_equal(result$fit$country_betas$idiosyncratic$usa, cbind(L = expected_level_residual[, "usa"], S = expected_slope_residual[, "usa"]))
   expect_equal(result$fit$country_betas$idiosyncratic$gbr, dly_fit_obj$country_betas$idiosyncratic$gbr)
-  expect_equal(result$fit$dynamics$global$propagated, expected_global_state, tolerance = 1e-8)
-  expect_equal(result$fit$dynamics$residual$usa$propagated, expected_residual_state$usa, tolerance = 1e-8)
-  expect_equal(result$fit$dynamics$residual$gbr$propagated, expected_residual_state$gbr, tolerance = 1e-8)
-  expect_equal(result$fit$country_betas$dislocation_propagated$usa, expected_propagated_betas$usa, tolerance = 1e-8)
-  expect_equal(result$fit$country_betas$dislocation_propagated$gbr, expected_propagated_betas$gbr, tolerance = 1e-8)
   expect_gt(
     max(abs(
-      result$fit$country_betas$dislocation_propagated$usa[-shock_rows, , drop = FALSE] -
-        result$fit$country_betas$raw$usa[-shock_rows, , drop = FALSE]
-    )),
-    0
-  )
-  expect_gt(
-    max(abs(
-      result$fit$country_betas$dislocation_propagated$gbr -
-        dly_fit_obj$country_betas$dislocation_propagated$gbr
+      result$fit$country_betas$global_plus_idiosyncratic$usa -
+        result$fit$country_betas$raw$usa
     )),
     0
   )
   expect_equal(
-    as.matrix(result$fit$yields$dislocation_propagated$usa[, -1, drop = FALSE]),
-    as.matrix(dly_curve_yields(
-      expected_shocked_single_curve,
-      expected_global_factor$level + expected_residual_factor$level,
-      expected_global_factor$slope + expected_residual_factor$slope,
-      curves = fixture_curves
-    )$usa[, -1, drop = FALSE]),
+    result$fit$country_betas$global_plus_idiosyncratic$usa,
+    expected_global_plus_idio_betas$usa,
+    tolerance = 1e-8
+  )
+  expect_equal(
+    result$fit$country_betas$global_plus_idiosyncratic$gbr,
+    expected_global_plus_idio_betas$gbr,
     tolerance = 1e-8
   )
   expect_gt(
     max(abs(
-      result$fit$country_betas$dislocation_propagated$usa[nrow(result$fit$country_betas$dislocation_propagated$usa), ] -
-        dly_fit_obj$country_betas$dislocation_propagated$usa[nrow(dly_fit_obj$country_betas$dislocation_propagated$usa), ]
+      result$fit$country_betas$global_plus_idiosyncratic$gbr -
+        dly_fit_obj$country_betas$global_plus_idiosyncratic$gbr
     )),
     0
   )
+  expect_equal(
+    as.matrix(result$fit$yields$global_plus_idiosyncratic$usa[, -1, drop = FALSE]),
+    as.matrix(dly_curve_yields(
+      expected_shocked_single_curve,
+      expected_global_plus_idio_level,
+      expected_global_plus_idio_slope,
+      curves = fixture_curves
+    )$usa[, -1, drop = FALSE]),
+    tolerance = 1e-8
+  )
 })
 
-test_that("st_dly_shock_from_fit can refit DLY on shocked curve histories", {
-  baseline_betas <- list(
-    usa = cbind(L = c(1, 2), S = c(0.2, 0.3)),
-    gbr = cbind(L = c(3, 4), S = c(0.4, 0.5))
-  )
-  shocked_yields <- make_pair_yields()
-  captured_yields <- NULL
-  captured_lambdas <- NULL
-
-  dly_fit_obj <- list(
-    curves = fixture_curves,
+test_that("st_dly_global_shock_from_fit_profile shifts average fitted country level by target profile", {
+  dly_fit_obj <- dly_fit(
+    yields = make_pair_yields(),
     mats = fixture_mats,
+    lambdas = c(0.35),
+    curves = fixture_curves,
     reference = "usa",
     center = TRUE,
-    scale. = FALSE,
-    single_curve = "baseline_single_curve"
+    scale. = FALSE
   )
 
-  result <- with_temp_bindings(
-    list(
-      dly_pull_beta = function(...) baseline_betas,
-      st_build_shocked_dly_single_curve = function(dly_single_curve, shocked_factors, curves) {
-        list(tag = "shocked_single_curve", shocked_factors = shocked_factors, curves = curves)
-      },
-      st_dly_curve_yields_from_single_curve = function(dly_single_curve, curves) {
-        expect_equal(dly_single_curve$tag, "shocked_single_curve")
-        expect_equal(curves, fixture_curves)
-        shocked_yields
-      },
-      dly_fit = function(yields, mats, lambdas, curves, reference, center, scale.) {
-        captured_yields <<- yields
-        captured_lambdas <<- lambdas
-        list(
-          tag = "refit_dly",
-          yields = list(raw = yields),
-          mats = mats,
-          curves = curves,
-          reference = reference,
-          center = center,
-          scale. = scale.
-        )
-      }
-    ),
-    st_dly_shock_from_fit(
-      dly_fit_obj = dly_fit_obj,
-      shock_curves = "usa",
-      shock_factors = "L",
-      shock_magnitude = 0.25,
-      refit_dly = TRUE,
-      lambdas = c(0.1, 0.2)
-    )
+  shock_fraction <- rep(-0.3, length(fixture_time))
+  target_profile <- st_average_level_shock_profile(
+    curve_factor = dly_fit_obj$country_betas$raw,
+    shock_fraction_profile = shock_fraction,
+    shock_factor = "L",
+    curves = fixture_curves
   )
 
-  expect_equal(result$shock_matrix["L", "usa"], 0.25)
-  expect_equal(result$shock_matrix["L", "gbr"], 0)
-  expect_equal(captured_yields, shocked_yields)
-  expect_equal(captured_lambdas, c(0.1, 0.2))
-  expect_equal(result$fit$tag, "refit_dly")
-  expect_equal(result$fit$reference, "usa")
-})
-
-test_that("st_dly_shock_refit_from_fit delegates to the hybrid DLY path with refit enabled", {
-  dly_fit_obj <- list(reference = "usa")
-  captured <- NULL
-
-  result <- with_temp_bindings(
-    list(
-      st_dly_shock_from_fit = function(dly_fit_obj, shock_curves, shock_factors,
-                                       shock_magnitude, shock_type, shock_window,
-                                       shock_window_position, refit_dly, lambdas) {
-        captured <<- list(
-          shock_curves = shock_curves,
-          shock_factors = shock_factors,
-          shock_magnitude = shock_magnitude,
-          shock_type = shock_type,
-          shock_window = shock_window,
-          shock_window_position = shock_window_position,
-          refit_dly = refit_dly,
-          lambdas = lambdas
-        )
-        list(tag = "delegated", reference = dly_fit_obj$reference)
-      }
-    ),
-    st_dly_shock_refit_from_fit(
-      dly_fit_obj = dly_fit_obj,
-      shock_curves = "usa",
-      shock_factors = "L",
-      shock_magnitude = 0.25,
-      lambdas = c(0.1, 0.2)
-    )
+  result <- st_dly_global_shock_from_fit_profile(
+    dly_fit_obj = dly_fit_obj,
+    shock_factors = "L",
+    shock_profile = target_profile
   )
 
-  expect_equal(result$tag, "delegated")
-  expect_equal(result$reference, "usa")
-  expect_equal(captured$shock_curves, "usa")
-  expect_equal(captured$shock_factors, "L")
-  expect_equal(captured$shock_magnitude, 0.25)
-  expect_equal(captured$shock_type, "additive")
-  expect_null(captured$shock_window)
-  expect_equal(captured$shock_window_position, "first")
-  expect_true(captured$refit_dly)
-  expect_equal(captured$lambdas, c(0.1, 0.2))
+  baseline_avg_level <- rowMeans(do.call(
+    cbind,
+    lapply(dly_fit_obj$country_betas$global_plus_idiosyncratic, function(x) x[, "L"])
+  ))
+  shocked_avg_level <- rowMeans(do.call(
+    cbind,
+    lapply(result$fit$country_betas$global_plus_idiosyncratic, function(x) x[, "L"])
+  ))
+
+  expect_equal(
+    as.numeric(shocked_avg_level - baseline_avg_level),
+    as.numeric(target_profile),
+    tolerance = 1e-8
+  )
 })
 
 test_that("mc_fit_shock_from_baseline uses shocked factors without refitting single-curve state", {
@@ -692,7 +522,7 @@ test_that("mc_fit_shock_refit_from_baseline delegates to MCE refits without sing
       mc_fit_shock_from_baseline = function(baseline_state, shock_curves, shock_factors,
                                             shock_magnitude, shock_type, shock_window,
                                             shock_window_position,
-                                            reuse_BS0, reuse_ECM, anchor_shock_curves,
+                                            reuse_BS0, reuse_ECM,
                                             ...) {
         captured <<- list(
           shock_curves = shock_curves,
@@ -702,8 +532,7 @@ test_that("mc_fit_shock_refit_from_baseline delegates to MCE refits without sing
           shock_window = shock_window,
           shock_window_position = shock_window_position,
           reuse_BS0 = reuse_BS0,
-          reuse_ECM = reuse_ECM,
-          anchor_shock_curves = anchor_shock_curves
+          reuse_ECM = reuse_ECM
         )
         list(tag = "delegated", baseline_reference = baseline_state$reference)
       }
@@ -726,5 +555,4 @@ test_that("mc_fit_shock_refit_from_baseline delegates to MCE refits without sing
   expect_equal(captured$shock_window_position, "first")
   expect_false(captured$reuse_BS0)
   expect_false(captured$reuse_ECM)
-  expect_false(captured$anchor_shock_curves)
 })

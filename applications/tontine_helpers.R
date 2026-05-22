@@ -100,6 +100,17 @@ tontine_first_observed_date <- function(curve_df, year_value) {
   min(year_rows)
 }
 
+tontine_last_observed_date <- function(curve_df, year_value) {
+  curve_time <- as.Date(curve_df$time)
+  year_rows <- curve_time[format(curve_time, "%Y") == as.character(year_value)]
+
+  if (length(year_rows) == 0) {
+    stop(sprintf("No reference-curve observations found for year %s.", year_value))
+  }
+
+  max(year_rows)
+}
+
 tontine_validate_probability_vector <- function(q, purchase_years) {
   if (!is.numeric(q) || anyNA(q) || length(q) != length(purchase_years)) {
     stop("`q` must be a numeric vector with one value per purchase year.")
@@ -128,7 +139,15 @@ tontine_bond_tenor_col <- function(bond_maturity_years) {
 
 tontine_build_valuation_windows <- function(yields, reference_curve, purchase_years,
                                             lookback_years = 2,
-                                            min_observations = 1) {
+                                            min_observations = 1,
+                                            date_position = c("first", "last"),
+                                            valuation_date_position = NULL) {
+  date_position <- match.arg(date_position)
+  if (is.null(valuation_date_position)) {
+    valuation_date_position <- date_position
+  }
+  valuation_date_position <- match.arg(valuation_date_position, c("first", "last"))
+
   if (!is.list(yields) || is.null(names(yields)) || !reference_curve %in% names(yields)) {
     stop("`yields` must be a named list containing `reference_curve`.")
   }
@@ -153,16 +172,27 @@ tontine_build_valuation_windows <- function(yields, reference_curve, purchase_ye
   lookback_years <- as.integer(lookback_years)
   reference_panel <- yields[[reference_curve]]
   reference_time <- as.Date(reference_panel$time)
+  resolve_purchase_date <- if (date_position == "first") {
+    tontine_first_observed_date
+  } else {
+    tontine_last_observed_date
+  }
+  resolve_valuation_date <- if (valuation_date_position == "first") {
+    tontine_first_observed_date
+  } else {
+    tontine_last_observed_date
+  }
 
   windows <- do.call(rbind, lapply(seq_along(purchase_years), function(i) {
-    purchase_date <- tontine_first_observed_date(reference_panel, purchase_years[[i]])
-    maturity_date <- tontine_first_observed_date(reference_panel, purchase_years[[i]] + 1L)
+    purchase_date <- resolve_purchase_date(reference_panel, purchase_years[[i]])
+    valuation_date <- resolve_valuation_date(reference_panel, purchase_years[[i]])
+    maturity_date <- resolve_purchase_date(reference_panel, purchase_years[[i]] + 1L)
     estimation_start <- seq(
-      from = as.Date(purchase_date),
+      from = as.Date(valuation_date),
       by = sprintf("-%d years", lookback_years),
       length.out = 2
     )[[2]]
-    estimation_end <- as.Date(purchase_date)
+    estimation_end <- as.Date(valuation_date)
     n_reference_observations <- sum(reference_time >= estimation_start & reference_time <= estimation_end)
 
     if (n_reference_observations < min_observations) {
@@ -176,6 +206,7 @@ tontine_build_valuation_windows <- function(yields, reference_curve, purchase_ye
       rung_id = i,
       purchase_year = purchase_years[[i]],
       purchase_date = as.Date(purchase_date),
+      valuation_date = as.Date(valuation_date),
       maturity_date = as.Date(maturity_date),
       lookback_years = lookback_years,
       estimation_start = as.Date(estimation_start),
@@ -422,6 +453,53 @@ tontine_extract_curve_rate <- function(curve_panel, target_date, tenor_col) {
   as.numeric(curve_panel[row_idx, tenor_col, drop = TRUE])
 }
 
+interpolate_curve_rate <- function(curve_panel, target_date, target_months,
+                                   mats, mat_names, rate_scale = c("percent", "decimal")) {
+  rate_scale <- match.arg(rate_scale)
+  if (!is.data.frame(curve_panel) || !"time" %in% colnames(curve_panel)) {
+    stop("`curve_panel` must be a data frame with a `time` column.")
+  }
+  if (!is.numeric(target_months) || length(target_months) != 1 ||
+      is.na(target_months) || target_months <= 0) {
+    stop("`target_months` must be a positive numeric scalar.")
+  }
+  if (!is.numeric(mats) || length(mats) == 0 || anyNA(mats) || any(mats <= 0)) {
+    stop("`mats` must be a positive numeric maturity vector in months.")
+  }
+  if (!is.character(mat_names) || length(mat_names) != length(mats) ||
+      anyNA(mat_names) || any(!nzchar(mat_names))) {
+    stop("`mat_names` must be a character vector aligned with `mats`.")
+  }
+  if (!all(mat_names %in% colnames(curve_panel))) {
+    stop("`curve_panel` is missing one or more maturity columns from `mat_names`.")
+  }
+
+  panel_time <- as.Date(curve_panel$time)
+  row_idx <- which(panel_time == as.Date(target_date))
+  if (length(row_idx) != 1) {
+    stop("Curve panel must contain exactly one row for `target_date`.")
+  }
+
+  node_years <- as.numeric(mats) / 12
+  target_years <- as.numeric(target_months) / 12
+  zero_rates <- as.numeric(curve_panel[row_idx, mat_names, drop = TRUE]) / 100
+  log_discount_nodes <- -zero_rates * node_years
+  log_discount <- stats::approx(
+    x = node_years,
+    y = log_discount_nodes,
+    xout = target_years,
+    rule = 2,
+    ties = "ordered"
+  )$y
+
+  interpolated_decimal_rate <- as.numeric(-log_discount / target_years)
+  if (identical(rate_scale, "percent")) {
+    return(100 * interpolated_decimal_rate)
+  }
+
+  interpolated_decimal_rate
+}
+
 tontine_mat_months_from_names <- function(mat_names) {
   suffix <- sub("^X", "", mat_names)
   out <- ifelse(
@@ -641,6 +719,25 @@ tontine_compare_mtm_shock <- function(baseline_holdings, baseline_curve_models,
     )
 
     key_cols <- c("model", "rung_id", "purchase_year", "country")
+    if (nrow(baseline_mtm) == 0 || nrow(shocked_mtm) == 0) {
+      return(data.frame(
+        model = character(),
+        rung_id = integer(),
+        purchase_year = integer(),
+        country = character(),
+        mtm_zero_rate_baseline = numeric(),
+        mtm_value_baseline = numeric(),
+        mtm_zero_rate_shocked = numeric(),
+        mtm_value_shocked = numeric(),
+        shock_label = character(),
+        valuation_date = as.Date(character()),
+        mtm_value_delta = numeric(),
+        mtm_value_delta_pct = numeric(),
+        mtm_zero_rate_delta = numeric(),
+        stringsAsFactors = FALSE
+      ))
+    }
+
     out <- merge(
       baseline_mtm[, c(key_cols, "mtm_zero_rate", "mtm_value"), drop = FALSE],
       shocked_mtm[, c(key_cols, "mtm_zero_rate", "mtm_value"), drop = FALSE],
@@ -848,7 +945,7 @@ tontine_fit_dns_baseline_curves <- function(yields, curves, mats, mat_names,
 
 tontine_fit_dly_baseline_curves <- function(yields, curves, mats, mat_names,
                                             lambdas, reference_curve,
-                                            component = "dislocation_propagated") {
+                                            component = "global_plus_idiosyncratic") {
   dly_fit_obj <- dly_fit(
     yields = yields,
     mats = mats,
@@ -988,9 +1085,46 @@ tontine_extract_purchase_curve_rows <- function(curve_panels, curves, mat_names,
   }), curves)
 }
 
+tontine_extract_window_curve_rows <- function(curve_panels, curves, mat_names,
+                                              valuation_window) {
+  if (nrow(valuation_window) != 1) {
+    stop("`valuation_window` must contain exactly one row.")
+  }
+
+  row_dates <- unique(as.Date(c(
+    valuation_window$purchase_date[[1]],
+    if ("valuation_date" %in% colnames(valuation_window)) {
+      valuation_window$valuation_date[[1]]
+    } else {
+      valuation_window$purchase_date[[1]]
+    }
+  )))
+
+  setNames(lapply(curves, function(curve_name) {
+    curve_panel <- curve_panels[[curve_name]]
+    if (is.null(curve_panel)) {
+      stop(sprintf("Curve panels are missing curve `%s`.", curve_name))
+    }
+
+    out <- do.call(rbind, lapply(row_dates, function(row_date) {
+      row_idx <- which(as.Date(curve_panel$time) == row_date)
+      if (length(row_idx) != 1) {
+        stop("Curve panel must contain exactly one row for each window report date.")
+      }
+
+      curve_row <- curve_panel[row_idx, c("time", mat_names), drop = FALSE]
+      curve_row$time <- as.Date(curve_row$time)
+      curve_row
+    }))
+    rownames(out) <- NULL
+    out[order(as.Date(out$time)), , drop = FALSE]
+  }), curves)
+}
+
 tontine_bind_purchase_curve_rows <- function(purchase_rows, curves) {
   setNames(lapply(curves, function(curve_name) {
     out <- do.call(rbind, lapply(purchase_rows, `[[`, curve_name))
+    out <- out[!duplicated(as.Date(out$time)), , drop = FALSE]
     rownames(out) <- NULL
     out[order(as.Date(out$time)), , drop = FALSE]
   }), curves)
@@ -1076,11 +1210,11 @@ tontine_fit_rolling_baseline_curve_models <- function(yields, valuation_windows,
       }
       window_fit <- fit_one_window(model_name, window_yields)
       window_fits[[i]] <- window_fit
-      purchase_rows[[i]] <- tontine_extract_purchase_curve_rows(
+      purchase_rows[[i]] <- tontine_extract_window_curve_rows(
         curve_panels = window_fit$curve_panels,
         curves = curves,
         mat_names = mat_names,
-        purchase_date = valuation_window$purchase_date[[1]]
+        valuation_window = valuation_window
       )
     }
 
@@ -1095,24 +1229,17 @@ tontine_fit_rolling_baseline_curve_models <- function(yields, valuation_windows,
   model_results
 }
 
-tontine_apply_observed_level_shock <- function(curve_panels, shock_spec, mat_names) {
-  shocked_panels <- curve_panels
-
-  for (curve_name in shock_spec$shock_curves) {
-    shocked_panels[[curve_name]][, mat_names] <-
-      shocked_panels[[curve_name]][, mat_names, drop = FALSE] + shock_spec$shock_magnitude
-  }
-
-  shocked_panels
-}
-
 tontine_is_decay_shock <- function(shock_spec) {
   identical(shock_spec$shock_profile, "linear_decay") ||
+    identical(shock_spec$shock_profile, "linear_increase") ||
     (!is.null(shock_spec$shock_start_year) && !is.null(shock_spec$shock_end_year))
 }
 
 tontine_resolve_shock_anchor_date <- function(valuation_windows, year_value, anchor) {
-  anchor <- match.arg(anchor, c("purchase_date", "maturity_date", "estimation_start", "estimation_end"))
+  anchor <- match.arg(
+    anchor,
+    c("purchase_date", "valuation_date", "maturity_date", "estimation_start", "estimation_end")
+  )
   window <- valuation_windows[valuation_windows$purchase_year == as.integer(year_value), , drop = FALSE]
 
   if (nrow(window) != 1) {
@@ -1147,7 +1274,7 @@ tontine_resolve_decay_shock_dates <- function(valuation_windows, shock_spec) {
 tontine_build_calendar_decay_profile <- function(dates, shock_start_date, shock_end_date,
                                                  shock_start_magnitude = 1,
                                                  shock_end_magnitude = 0,
-                                                 profile = c("linear_decay")) {
+                                                 profile = c("linear_decay", "linear_increase")) {
   profile <- match.arg(profile)
   dates <- as.Date(dates)
   shock_start_date <- as.Date(shock_start_date)
@@ -1177,279 +1304,59 @@ tontine_build_calendar_decay_profile <- function(dates, shock_start_date, shock_
   )
 }
 
-tontine_apply_factor_shock_profile <- function(curves, curve_dns_factor,
-                                               shock_curves, shock_factors,
-                                               shock_magnitudes,
-                                               shock_type = c("additive", "multiplicative")) {
-  shock_type <- match.arg(shock_type)
+tontine_build_full_window_decay_profile <- function(dates, valuation_date,
+                                                    shock_start_date, shock_end_date,
+                                                    shock_start_magnitude = 1,
+                                                    shock_end_magnitude = 0,
+                                                    profile = c("linear_decay", "linear_increase")) {
+  profile <- match.arg(profile)
+  dates <- as.Date(dates)
+  valuation_date <- as.Date(valuation_date)
 
-  if (!is.list(curve_dns_factor) || length(curve_dns_factor) == 0 ||
-      is.null(names(curve_dns_factor))) {
-    stop("`curve_dns_factor` must be a non-empty named list.")
-  }
+  valuation_profile <- tontine_build_calendar_decay_profile(
+    dates = valuation_date,
+    shock_start_date = shock_start_date,
+    shock_end_date = shock_end_date,
+    shock_start_magnitude = shock_start_magnitude,
+    shock_end_magnitude = shock_end_magnitude,
+    profile = profile
+  )
 
-  if (length(shock_factors) != 1) {
-    stop("Profile shocks currently support one shocked factor at a time.")
-  }
-
-  if (!all(shock_curves %in% curves)) {
-    stop("`shock_curves` must be a subset of `curves`.")
-  }
-
-  factor_dim <- ncol(as.matrix(curve_dns_factor[[1]]))
-  if (factor_dim == 2) {
-    model_factors <- c("L", "S")
-  } else if (factor_dim == 3) {
-    model_factors <- c("L", "S", "C")
-  } else {
-    stop("`curve_dns_factor` entries must be 2- or 3-dimensional.")
-  }
-
-  if (!shock_factors %in% model_factors) {
-    stop("`shock_factors` must be compatible with the model factor dimension.")
-  }
-
-  factor_idx <- match(shock_factors, model_factors)
-  shock_magnitudes <- as.numeric(shock_magnitudes)
-
-  shocked_curve_dns_factor <- setNames(lapply(names(curve_dns_factor), function(curve_name) {
-    curve_factor_mat <- as.matrix(curve_dns_factor[[curve_name]])
-    if (nrow(curve_factor_mat) != length(shock_magnitudes)) {
-      stop("Shock profile length must match the number of factor rows.")
-    }
-    if (ncol(curve_factor_mat) != factor_dim) {
-      stop("All `curve_dns_factor` entries must have the same number of columns.")
-    }
-
-    shocked_mat <- curve_factor_mat
-    if (curve_name %in% shock_curves) {
-      if (shock_type == "additive") {
-        shocked_mat[, factor_idx] <- curve_factor_mat[, factor_idx] + shock_magnitudes
-      } else {
-        shocked_mat[, factor_idx] <- curve_factor_mat[, factor_idx] * (1 + shock_magnitudes)
-      }
-    }
-
-    colnames(shocked_mat) <- model_factors
-    shocked_mat
-  }), names(curve_dns_factor))
-
-  list(
-    shock_profile = shock_magnitudes,
-    shocked_factors = shocked_curve_dns_factor
+  data.frame(
+    time = dates,
+    shock_magnitude = rep(valuation_profile$shock_magnitude[[1]], length(dates)),
+    stringsAsFactors = FALSE
   )
 }
 
-tontine_profile_shock_rows <- function(shock_profile) {
-  which(abs(as.numeric(shock_profile$shock_magnitude)) > sqrt(.Machine$double.eps))
+tontine_profile_has_shock <- function(shock_profile) {
+  if (is.null(shock_profile)) {
+    return(FALSE)
+  }
+
+  any(abs(as.numeric(shock_profile$shock_magnitude)) > sqrt(.Machine$double.eps))
 }
 
-tontine_dly_shock_from_fit_profile <- function(dly_fit_obj, shock_spec,
-                                               shock_profile,
-                                               shock_type = c("additive", "multiplicative")) {
-  shock_type <- match.arg(shock_type)
+tontine_uses_average_level_fraction_shock <- function(shock_spec) {
+  identical(shock_spec$shock_basis, "average_level_fraction")
+}
 
-  shock_fit <- tontine_apply_factor_shock_profile(
-    curves = dly_fit_obj$curves,
-    curve_dns_factor = dly_pull_beta(dly_fit_obj$single_curve, curves = dly_fit_obj$curves),
-    shock_curves = shock_spec$shock_curves,
-    shock_factors = shock_spec$shock_factors,
-    shock_magnitudes = shock_profile$shock_magnitude,
-    shock_type = shock_type
-  )
+tontine_resolve_average_level_shock_profile <- function(curve_factor, shock_profile,
+                                                        shock_factor = "L",
+                                                        curves = names(curve_factor)) {
+  if (!is.data.frame(shock_profile) || !"shock_magnitude" %in% colnames(shock_profile)) {
+    stop("`shock_profile` must contain `shock_magnitude`.")
+  }
 
-  shocked_single_curve <- st_build_shocked_dly_single_curve(
-    dly_single_curve = dly_fit_obj$single_curve,
-    shocked_factors = shock_fit$shocked_factors,
-    curves = dly_fit_obj$curves
+  out <- shock_profile
+  out$shock_fraction <- as.numeric(out$shock_magnitude)
+  out$shock_magnitude <- st_average_level_shock_profile(
+    curve_factor = curve_factor,
+    shock_fraction_profile = out$shock_fraction,
+    shock_factor = shock_factor,
+    curves = curves
   )
-
-  raw_level_factor <- dly_group_factor(shocked_single_curve, curves = dly_fit_obj$curves, latent = "L")
-  raw_slope_factor <- dly_group_factor(shocked_single_curve, curves = dly_fit_obj$curves, latent = "S")
-
-  shocked_global_level <- st_dly_project_global_factor(
-    factor_draw = raw_level_factor,
-    global_factor_obj = dly_fit_obj$global_factors$level
-  )
-  shocked_global_slope <- st_dly_project_global_factor(
-    factor_draw = raw_slope_factor,
-    global_factor_obj = dly_fit_obj$global_factors$slope
-  )
-
-  shocked_level_fitted <- st_dly_predict_country_factor(
-    factor_model = dly_fit_obj$factor_models$level,
-    global_factor = shocked_global_level,
-    curves = dly_fit_obj$curves
-  )
-  shocked_slope_fitted <- st_dly_predict_country_factor(
-    factor_model = dly_fit_obj$factor_models$slope,
-    global_factor = shocked_global_slope,
-    curves = dly_fit_obj$curves
-  )
-
-  baseline_level_residual <- as.matrix(
-    dly_fit_obj$factor_models$level$residual[, dly_fit_obj$curves, drop = FALSE]
-  )
-  baseline_slope_residual <- as.matrix(
-    dly_fit_obj$factor_models$slope$residual[, dly_fit_obj$curves, drop = FALSE]
-  )
-
-  shock_rows <- tontine_profile_shock_rows(shock_profile)
-  shock_residual_states <- st_dly_shock_residual_states(
-    raw_level_factor = raw_level_factor,
-    raw_slope_factor = raw_slope_factor,
-    fitted_level_factor = shocked_level_fitted,
-    fitted_slope_factor = shocked_slope_fitted,
-    curves = dly_fit_obj$curves
-  )
-  propagated_global_state <- st_dly_shock_global_path(
-    dly_fit_obj = dly_fit_obj,
-    shocked_global_level = shocked_global_level,
-    shocked_global_slope = shocked_global_slope,
-    shock_rows = shock_rows
-  )
-  propagated_residual_state <- st_dly_shock_residual_path(
-    dly_fit_obj = dly_fit_obj,
-    global_path = propagated_global_state,
-    shock_residual_states = shock_residual_states,
-    shock_rows = shock_rows
-  )
-  propagated_global_factor <- dly_country_global_factors(
-    level_global_factor = propagated_global_state[, "L"],
-    slope_global_factor = propagated_global_state[, "S"],
-    factor_models = dly_fit_obj$factor_models,
-    curves = dly_fit_obj$curves
-  )
-  propagated_residual_factor <- dly_unpack_country_state(
-    country_state_list = propagated_residual_state,
-    curves = dly_fit_obj$curves
-  )
-  propagated_level_factor <- propagated_global_factor$level + propagated_residual_factor$level
-  propagated_slope_factor <- propagated_global_factor$slope + propagated_residual_factor$slope
-
-  raw_betas <- dly_bind_betas(raw_level_factor, raw_slope_factor, curves = dly_fit_obj$curves)
-  global_betas <- dly_bind_betas(shocked_level_fitted, shocked_slope_fitted, curves = dly_fit_obj$curves)
-  idio_betas <- dly_bind_betas(baseline_level_residual, baseline_slope_residual, curves = dly_fit_obj$curves)
-  propagated_betas <- dly_bind_betas(
-    propagated_level_factor,
-    propagated_slope_factor,
-    curves = dly_fit_obj$curves
-  )
-
-  raw_yields <- dly_curve_yields(
-    shocked_single_curve,
-    raw_level_factor,
-    raw_slope_factor,
-    curves = dly_fit_obj$curves
-  )
-  global_yields <- dly_curve_yields(
-    shocked_single_curve,
-    shocked_level_fitted,
-    shocked_slope_fitted,
-    curves = dly_fit_obj$curves
-  )
-  idiosyncratic_yields <- dly_curve_yields(
-    shocked_single_curve,
-    baseline_level_residual,
-    baseline_slope_residual,
-    curves = dly_fit_obj$curves
-  )
-  propagated_yields <- dly_curve_yields(
-    shocked_single_curve,
-    propagated_level_factor,
-    propagated_slope_factor,
-    curves = dly_fit_obj$curves
-  )
-
-  shocked_fit <- list(
-    curves = dly_fit_obj$curves,
-    mats = dly_fit_obj$mats,
-    reference = dly_fit_obj$reference,
-    center = dly_fit_obj$center,
-    scale. = dly_fit_obj$scale.,
-    lambdas = dly_fit_obj$lambdas,
-    single_curve = shocked_single_curve,
-    country_factors = list(
-      level = raw_level_factor,
-      slope = raw_slope_factor
-    ),
-    global_factors = list(
-      level = list(
-        factor = shocked_global_level,
-        loading = dly_fit_obj$global_factors$level$loading,
-        pca = dly_fit_obj$global_factors$level$pca,
-        explained_variance = dly_fit_obj$global_factors$level$explained_variance
-      ),
-      slope = list(
-        factor = shocked_global_slope,
-        loading = dly_fit_obj$global_factors$slope$loading,
-        pca = dly_fit_obj$global_factors$slope$pca,
-        explained_variance = dly_fit_obj$global_factors$slope$explained_variance
-      )
-    ),
-    factor_models = list(
-      level = list(
-        intercept = dly_fit_obj$factor_models$level$intercept,
-        loading = dly_fit_obj$factor_models$level$loading,
-        fitted = shocked_level_fitted,
-        residual = baseline_level_residual,
-        r_squared = dly_fit_obj$factor_models$level$r_squared
-      ),
-      slope = list(
-        intercept = dly_fit_obj$factor_models$slope$intercept,
-        loading = dly_fit_obj$factor_models$slope$loading,
-        fitted = shocked_slope_fitted,
-        residual = baseline_slope_residual,
-        r_squared = dly_fit_obj$factor_models$slope$r_squared
-      )
-    ),
-    country_betas = list(
-      raw = raw_betas,
-      global = global_betas,
-      idiosyncratic = idio_betas,
-      dislocation_propagated = propagated_betas
-    ),
-    yields = list(
-      raw = raw_yields,
-      global = global_yields,
-      idiosyncratic = idiosyncratic_yields,
-      dislocation_propagated = propagated_yields
-    ),
-    residuals = list(
-      raw = dly_curve_residuals(raw_yields, raw_yields, dly_fit_obj$curves),
-      global = dly_curve_residuals(raw_yields, global_yields, dly_fit_obj$curves),
-      dislocation_propagated = dly_curve_residuals(
-        raw_yields,
-        propagated_yields,
-        dly_fit_obj$curves
-      )
-    ),
-    dynamics = list(
-      global = c(
-        dly_fit_obj$dynamics$global[names(dly_fit_obj$dynamics$global) %in% c("intercept", "phi", "fitted", "residual")],
-        list(
-          actual = as.matrix(dly_fit_obj$dynamics$global$actual),
-          propagated = propagated_global_state
-        )
-      ),
-      residual = setNames(lapply(dly_fit_obj$curves, function(curve_name) {
-        c(
-          dly_fit_obj$dynamics$residual[[curve_name]][names(dly_fit_obj$dynamics$residual[[curve_name]]) %in% c("intercept", "phi", "kappa", "fitted", "residual")],
-          list(
-            actual = as.matrix(dly_fit_obj$dynamics$residual[[curve_name]]$actual),
-            propagated = propagated_residual_state[[curve_name]]
-          )
-        )
-      }), dly_fit_obj$curves)
-    )
-  )
-
-  list(
-    fit = shocked_fit,
-    shock_profile = shock_profile,
-    shocked_factors = shock_fit$shocked_factors,
-    baseline_fit = dly_fit_obj
-  )
+  out
 }
 
 tontine_mce_shock_from_baseline_profile <- function(baseline_state, shock_spec,
@@ -1467,10 +1374,18 @@ tontine_mce_shock_from_baseline_profile <- function(baseline_state, shock_spec,
 
   reuse_BS0 <- get_control("reuse_BS0", TRUE)
   reuse_ECM <- get_control("reuse_ECM", TRUE)
-  anchor_shock_curves <- get_control("anchor_shock_curves", FALSE)
   ECM_fallback <- match.arg(get_control("ECM_fallback", "baseline"), c("error", "baseline"))
 
-  shock_fit <- tontine_apply_factor_shock_profile(
+  if (tontine_uses_average_level_fraction_shock(shock_spec)) {
+    shock_profile <- tontine_resolve_average_level_shock_profile(
+      curve_factor = single_curve_state$ns_factor,
+      shock_profile = shock_profile,
+      shock_factor = shock_spec$shock_factors,
+      curves = baseline_state$curves
+    )
+  }
+
+  shock_fit <- st_apply_factor_shock_profile(
     curves = baseline_state$curves,
     curve_dns_factor = single_curve_state$ns_factor,
     shock_curves = shock_spec$shock_curves,
@@ -1541,29 +1456,6 @@ tontine_mce_shock_from_baseline_profile <- function(baseline_state, shock_spec,
     W = shocked_state$W
   )
 
-  if (isTRUE(anchor_shock_curves)) {
-    shock_rows <- tontine_profile_shock_rows(shock_profile)
-    shock_delta_yields <- st_curve_shock_delta(
-      baseline_yields = single_curve_state$yields,
-      shocked_yields = shocked_state$yields,
-      shock_curves = shock_spec$shock_curves
-    )
-    shocked_fit_state$curve <- st_anchor_curve_output(
-      curve_panel = shocked_fit_state$curve,
-      baseline_curve_panel = baseline_state$baseline_fit$curve,
-      shock_delta_yields = shock_delta_yields,
-      shock_curves = shock_spec$shock_curves,
-      curves = baseline_state$curves,
-      mats = baseline_state$mats,
-      anchor_rows = shock_rows
-    )
-    shocked_fit_state$tenor <- st_tenor_panel_from_curve_panel(
-      curve_panel = shocked_fit_state$curve,
-      curves = baseline_state$curves,
-      mats = baseline_state$mats
-    )
-  }
-
   list(
     tenor = baseline_state$baseline_fit$tenor,
     curve = baseline_state$baseline_fit$curve,
@@ -1598,12 +1490,10 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
     stop("`shock_spec` must contain `shock_year`.")
   }
 
-  get_shock_control <- function(name, default) {
-    if (is.null(mce_shock_controls[[name]])) default else mce_shock_controls[[name]]
+  if (!is.null(shock_spec$shock_window)) {
+    stop("Application shocks now use row-wise profiles; `shock_window` is no longer supported here.")
   }
 
-  shock_window <- if (is.null(shock_spec$shock_window)) NULL else shock_spec$shock_window
-  shock_window_position <- if (is.null(shock_spec$shock_window_position)) "first" else shock_spec$shock_window_position
   shock_type <- if (is.null(shock_spec$shock_type)) "additive" else shock_spec$shock_type
   shock_label <- if (is.null(shock_spec$label)) {
     tontine_format_shock_label(shock_spec)
@@ -1616,9 +1506,13 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
     NULL
   }
 
-  build_window_shock_profile <- function(window_time) {
+  build_window_shock_profile <- function(window_time, valuation_window) {
     if (!is_decay_shock) {
-      return(NULL)
+      return(data.frame(
+        time = as.Date(window_time),
+        shock_magnitude = rep(shock_spec$shock_magnitude, length(window_time)),
+        stringsAsFactors = FALSE
+      ))
     }
 
     start_magnitude <- if (is.null(shock_spec$shock_start_magnitude)) {
@@ -1627,6 +1521,34 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
       shock_spec$shock_start_magnitude
     }
     end_magnitude <- if (is.null(shock_spec$shock_end_magnitude)) 0 else shock_spec$shock_end_magnitude
+    shock_profile_name <- if (is.null(shock_spec$shock_profile)) "linear_decay" else shock_spec$shock_profile
+    shock_effect_timing <- if (is.null(shock_spec$shock_effect_timing)) {
+      "calendar"
+    } else {
+      shock_spec$shock_effect_timing
+    }
+
+    if (!shock_effect_timing %in% c("calendar", "full_window")) {
+      stop("`shock_effect_timing` must be either `calendar` or `full_window`.")
+    }
+
+    if (shock_effect_timing == "full_window") {
+      valuation_date <- if ("valuation_date" %in% colnames(valuation_window)) {
+        valuation_window$valuation_date[[1]]
+      } else {
+        valuation_window$purchase_date[[1]]
+      }
+
+      return(tontine_build_full_window_decay_profile(
+        dates = window_time,
+        valuation_date = valuation_date,
+        shock_start_date = decay_dates$start_date,
+        shock_end_date = decay_dates$end_date,
+        shock_start_magnitude = start_magnitude,
+        shock_end_magnitude = end_magnitude,
+        profile = shock_profile_name
+      ))
+    }
 
     tontine_build_calendar_decay_profile(
       dates = window_time,
@@ -1634,7 +1556,7 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
       shock_end_date = decay_dates$end_date,
       shock_start_magnitude = start_magnitude,
       shock_end_magnitude = end_magnitude,
-      profile = "linear_decay"
+      profile = shock_profile_name
     )
   }
 
@@ -1649,13 +1571,8 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
     } else {
       valuation_window$purchase_year[[1]] == shock_spec$shock_year
     }
-
     if (model_name == "Observed") {
-      curve_panels <- tontine_observed_curve_panels(window_yields, curves, mat_names)
-      if (shock_this_window) {
-        curve_panels <- tontine_apply_observed_level_shock(curve_panels, shock_spec, mat_names)
-      }
-      return(list(model = "Observed", fit = NULL, curve_panels = curve_panels))
+      stop("Observed curves are not shocked in the tontine shock applications.")
     }
 
     if (model_name == "DNS") {
@@ -1671,38 +1588,37 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
         return(dns_fit)
       }
 
-      if (is_decay_shock) {
-        shock_profile <- build_window_shock_profile(dns_fit$fit$time)
-        dns_profile_shock <- tontine_apply_factor_shock_profile(
-          curves = dns_fit$fit$curves,
-          curve_dns_factor = dns_fit$fit$ns_factor,
-          shock_curves = shock_spec$shock_curves,
-          shock_factors = shock_spec$shock_factors,
-          shock_magnitudes = shock_profile$shock_magnitude,
-          shock_type = shock_type
-        )
-        shocked_state <- st_build_shocked_curve_state(
-          single_curve_state = dns_fit$fit,
-          shocked_factors = dns_profile_shock$shocked_factors
-        )
-        dns_shock <- list(
-          yields = shocked_state$yields,
-          ns_factor = shocked_state$ns_factor,
+      shock_profile <- build_window_shock_profile(dns_fit$fit$time, valuation_window)
+      if (tontine_uses_average_level_fraction_shock(shock_spec)) {
+        shock_profile <- tontine_resolve_average_level_shock_profile(
+          curve_factor = dns_fit$fit$ns_factor,
           shock_profile = shock_profile,
-          shocked_factors = dns_profile_shock$shocked_factors,
-          baseline_state = dns_fit$fit
-        )
-      } else {
-        dns_shock <- st_dns_shock_from_single_curve_state(
-          single_curve_state = dns_fit$fit,
-          shock_curves = shock_spec$shock_curves,
-          shock_factors = shock_spec$shock_factors,
-          shock_magnitude = shock_spec$shock_magnitude,
-          shock_type = shock_type,
-          shock_window = shock_window,
-          shock_window_position = shock_window_position
+          shock_factor = shock_spec$shock_factors,
+          curves = dns_fit$fit$curves
         )
       }
+      if (!tontine_profile_has_shock(shock_profile)) {
+        return(dns_fit)
+      }
+      dns_profile_shock <- st_apply_factor_shock_profile(
+        curves = dns_fit$fit$curves,
+        curve_dns_factor = dns_fit$fit$ns_factor,
+        shock_curves = shock_spec$shock_curves,
+        shock_factors = shock_spec$shock_factors,
+        shock_magnitudes = shock_profile$shock_magnitude,
+        shock_type = shock_type
+      )
+      shocked_state <- st_build_shocked_curve_state(
+        single_curve_state = dns_fit$fit,
+        shocked_factors = dns_profile_shock$shocked_factors
+      )
+      dns_shock <- list(
+        yields = shocked_state$yields,
+        ns_factor = shocked_state$ns_factor,
+        shock_profile = shock_profile,
+        shocked_factors = dns_profile_shock$shocked_factors,
+        baseline_state = dns_fit$fit
+      )
 
       dns_fit$curve_panels <- tontine_curve_yield_list_to_panels(
         curve_yields = dns_shock$yields,
@@ -1726,22 +1642,35 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
         return(dly_fit_obj)
       }
 
-      if (is_decay_shock) {
-        dly_shock <- tontine_dly_shock_from_fit_profile(
+      shock_profile <- build_window_shock_profile(
+        dly_fit_obj$fit$single_curve[[curves[[1]]]]$time,
+        valuation_window
+      )
+      if (tontine_uses_average_level_fraction_shock(shock_spec)) {
+        shock_profile <- tontine_resolve_average_level_shock_profile(
+          curve_factor = dly_fit_obj$fit$country_betas$raw,
+          shock_profile = shock_profile,
+          shock_factor = shock_spec$shock_factors,
+          curves = dly_fit_obj$fit$curves
+        )
+      }
+      if (!tontine_profile_has_shock(shock_profile)) {
+        return(dly_fit_obj)
+      }
+      dly_shock <- if (tontine_uses_average_level_fraction_shock(shock_spec)) {
+        st_dly_global_shock_from_fit_profile(
           dly_fit_obj = dly_fit_obj$fit,
-          shock_spec = shock_spec,
-          shock_profile = build_window_shock_profile(dly_fit_obj$fit$single_curve[[curves[[1]]]]$time),
+          shock_factors = shock_spec$shock_factors,
+          shock_profile = shock_profile,
           shock_type = shock_type
         )
       } else {
-        dly_shock <- st_dly_shock_from_fit(
+        st_dly_shock_from_fit_profile(
           dly_fit_obj = dly_fit_obj$fit,
           shock_curves = shock_spec$shock_curves,
           shock_factors = shock_spec$shock_factors,
-          shock_magnitude = shock_spec$shock_magnitude,
-          shock_type = shock_type,
-          shock_window = shock_window,
-          shock_window_position = shock_window_position
+          shock_profile = shock_profile,
+          shock_type = shock_type
         )
       }
 
@@ -1769,29 +1698,20 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
         return(mce_fit_obj)
       }
 
-      if (is_decay_shock) {
-        mce_shock <- tontine_mce_shock_from_baseline_profile(
-          baseline_state = mce_fit_obj$fit,
-          shock_spec = shock_spec,
-          shock_profile = build_window_shock_profile(mce_fit_obj$fit$single_curve_state$time),
-          shock_type = shock_type,
-          controls = mce_shock_controls
-        )
-      } else {
-        mce_shock <- mc_fit_shock_from_baseline(
-          baseline_state = mce_fit_obj$fit,
-          shock_curves = shock_spec$shock_curves,
-          shock_factors = shock_spec$shock_factors,
-          shock_magnitude = shock_spec$shock_magnitude,
-          shock_type = shock_type,
-          shock_window = shock_window,
-          shock_window_position = shock_window_position,
-          reuse_BS0 = get_shock_control("reuse_BS0", TRUE),
-          reuse_ECM = get_shock_control("reuse_ECM", TRUE),
-          anchor_shock_curves = get_shock_control("anchor_shock_curves", FALSE),
-          ECM_fallback = get_shock_control("ECM_fallback", "baseline")
-        )
+      shock_profile <- build_window_shock_profile(
+        mce_fit_obj$fit$single_curve_state$time,
+        valuation_window
+      )
+      if (!tontine_profile_has_shock(shock_profile)) {
+        return(mce_fit_obj)
       }
+      mce_shock <- tontine_mce_shock_from_baseline_profile(
+        baseline_state = mce_fit_obj$fit,
+        shock_spec = shock_spec,
+        shock_profile = shock_profile,
+        shock_type = shock_type,
+        controls = mce_shock_controls
+      )
 
       mce_fit_obj$curve_panels <- tontine_split_curve_panel(
         panel_df = mce_shock$shocked_curve,
@@ -1820,11 +1740,11 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
       )
       window_fit <- fit_one_window(model_name, window_yields, valuation_window, i)
       window_fits[[i]] <- window_fit
-      purchase_rows[[i]] <- tontine_extract_purchase_curve_rows(
+      purchase_rows[[i]] <- tontine_extract_window_curve_rows(
         curve_panels = window_fit$curve_panels,
         curves = curves,
         mat_names = mat_names,
-        purchase_date = valuation_window$purchase_date[[1]]
+        valuation_window = valuation_window
       )
     }
 
@@ -1972,6 +1892,566 @@ tontine_summarize_baseline_ladder <- function(baseline_valuation) {
     total_mortality_credit,
     avg_rate
   ))
+}
+
+tontine_add_calendar_years <- function(date_value, years) {
+  date_value <- as.Date(date_value)
+  date_parts <- as.POSIXlt(date_value)
+  date_parts$year <- date_parts$year + as.integer(years)
+  as.Date(date_parts)
+}
+
+tontine_resolve_maturity_date <- function(reference_panel, purchase_date, maturity_year) {
+  panel_time <- as.Date(reference_panel$time)
+  year_idx <- which(format(panel_time, "%Y") == as.character(as.integer(maturity_year)))
+
+  if (length(year_idx) > 0) {
+    return(min(panel_time[year_idx]))
+  }
+
+  tontine_add_calendar_years(purchase_date, maturity_year - as.integer(format(purchase_date, "%Y")))
+}
+
+tontine_build_rolling_reinvestment_ladder <- function(curve_panels, yields, reference_curve,
+                                                      purchase_years, curves, initial_cash,
+                                                      q, population_simulation = NULL,
+                                                      bond_maturity_years = 1, mat_names,
+                                                      model_name, scenario_name,
+                                                      scenario_type = "baseline",
+                                                      shock_label = NA_character_) {
+  if (!is.list(curve_panels) || is.null(names(curve_panels))) {
+    stop("`curve_panels` must be a named list of curve data frames.")
+  }
+
+  if (!is.list(yields) || is.null(names(yields)) || !reference_curve %in% names(yields)) {
+    stop("`yields` must be a named list containing `reference_curve`.")
+  }
+
+  if (!is.character(curves) || length(curves) == 0 || anyNA(curves) || any(!nzchar(curves))) {
+    stop("`curves` must be a non-empty character vector.")
+  }
+
+  missing_curves <- setdiff(curves, names(curve_panels))
+  if (length(missing_curves) > 0) {
+    stop("`curve_panels` is missing one or more ladder countries.")
+  }
+
+  if (!is.numeric(initial_cash) || length(initial_cash) != 1 ||
+      is.na(initial_cash) || initial_cash <= 0) {
+    stop("`initial_cash` must be a positive numeric scalar.")
+  }
+
+  purchase_years <- as.integer(purchase_years)
+  bond_maturity_years <- tontine_validate_bond_maturity_years(bond_maturity_years)
+  q <- tontine_validate_probability_vector(q, purchase_years)
+  p_k <- cumprod(1 - q)
+  tenor_col <- tontine_bond_tenor_col(bond_maturity_years)
+
+  if (!tenor_col %in% mat_names) {
+    stop(sprintf("`mat_names` must include required ladder tenor column `%s`.", tenor_col))
+  }
+
+  if (!is.null(population_simulation)) {
+    required_population_cols <- c(
+      "rung_id", "q_k", "expected_p_k", "population_start",
+      "deaths", "population_end", "realized_p_k"
+    )
+
+    if (!all(required_population_cols %in% colnames(population_simulation))) {
+      stop("`population_simulation` must be created by `tontine_simulate_population()`.")
+    }
+
+    if (nrow(population_simulation) != length(purchase_years)) {
+      stop("`population_simulation` must contain one row per purchase year.")
+    }
+
+    if (!all(population_simulation$rung_id == seq_along(purchase_years))) {
+      stop("`population_simulation$rung_id` must align with `purchase_years`.")
+    }
+
+    if (any(abs(population_simulation$q_k - q) > sqrt(.Machine$double.eps))) {
+      stop("`population_simulation$q_k` must match `q`.")
+    }
+  }
+
+  reference_panel <- yields[[reference_curve]]
+  purchase_dates <- as.Date(vapply(purchase_years, function(year_value) {
+    as.character(tontine_first_observed_date(reference_panel, year_value))
+  }, character(1)))
+  maturity_dates <- as.Date(vapply(seq_along(purchase_years), function(i) {
+    as.character(tontine_resolve_maturity_date(
+      reference_panel = reference_panel,
+      purchase_date = purchase_dates[[i]],
+      maturity_year = purchase_years[[i]] + bond_maturity_years
+    ))
+  }, character(1)))
+
+  country_holdings <- vector("list", length(purchase_years))
+  cash_accounts <- vector("list", length(purchase_years))
+  initial_rung_count <- min(bond_maturity_years, length(purchase_years))
+  annual_initial_cash <- initial_cash / initial_rung_count
+  reserve_cash_start <- initial_cash
+  carry_cash_start <- 0
+  cumulative_profit_loss <- 0
+
+  for (i in seq_along(purchase_years)) {
+    purchase_date <- purchase_dates[[i]]
+    maturity_date <- maturity_dates[[i]]
+    initial_cash_draw <- if (i <= initial_rung_count) {
+      min(annual_initial_cash, reserve_cash_start)
+    } else {
+      0
+    }
+    maturity_proceeds_from_prior <- if (i == 1) {
+      0
+    } else {
+      prior_cash_accounts <- do.call(rbind, cash_accounts[seq_len(i - 1)])
+      previous_purchase_date <- purchase_dates[[i - 1]]
+      sum(
+        prior_cash_accounts$maturity_proceeds[
+          as.Date(prior_cash_accounts$maturity_date) > previous_purchase_date &
+            as.Date(prior_cash_accounts$maturity_date) <= purchase_date
+        ],
+        na.rm = TRUE
+      )
+    }
+    available_cash <- carry_cash_start + initial_cash_draw + maturity_proceeds_from_prior
+
+    zero_rates <- vapply(curves, function(country_name) {
+      tontine_extract_curve_rate(
+        curve_panel = curve_panels[[country_name]],
+        target_date = purchase_date,
+        tenor_col = tenor_col
+      ) / 100
+    }, numeric(1))
+    discount_factors <- exp(-zero_rates * bond_maturity_years)
+    total_purchased_par <- available_cash / mean(discount_factors)
+    country_par <- total_purchased_par / length(curves)
+    purchase_costs <- country_par * discount_factors
+    rung_purchase_cost <- sum(purchase_costs)
+    rung_maturity_proceeds <- total_purchased_par
+    cash_end <- available_cash - rung_purchase_cost
+    reserve_cash_end <- reserve_cash_start - initial_cash_draw
+    rung_profit_loss <- rung_maturity_proceeds - rung_purchase_cost
+    cumulative_profit_loss <- cumulative_profit_loss + rung_profit_loss
+
+    population_start <- if (is.null(population_simulation)) {
+      NA_integer_
+    } else {
+      population_simulation$population_start[[i]]
+    }
+    deaths <- if (is.null(population_simulation)) {
+      NA_integer_
+    } else {
+      population_simulation$deaths[[i]]
+    }
+    population_end <- if (is.null(population_simulation)) {
+      NA_integer_
+    } else {
+      population_simulation$population_end[[i]]
+    }
+    realized_p_k <- if (is.null(population_simulation)) {
+      NA_real_
+    } else {
+      population_simulation$realized_p_k[[i]]
+    }
+    purchased_par_per_start_member <- if (!is.na(population_start) && population_start > 0) {
+      total_purchased_par / population_start
+    } else {
+      NA_real_
+    }
+    per_survivor_maturity_value <- if (!is.na(population_end) && population_end > 0) {
+      total_purchased_par / population_end
+    } else {
+      NA_real_
+    }
+    mortality_credit_par <- if (!is.na(deaths) && !is.na(purchased_par_per_start_member)) {
+      deaths * purchased_par_per_start_member
+    } else {
+      NA_real_
+    }
+    mortality_credit_per_survivor <- per_survivor_maturity_value - purchased_par_per_start_member
+
+    country_holdings[[i]] <- data.frame(
+      model = model_name,
+      scenario = scenario_name,
+      scenario_type = scenario_type,
+      shock_label = shock_label,
+      rung_id = i,
+      purchase_year = purchase_years[[i]],
+      purchase_date = purchase_date,
+      maturity_date = maturity_date,
+      bond_maturity_years = bond_maturity_years,
+      tenor_col = tenor_col,
+      country = curves,
+      target_par = total_purchased_par,
+      country_par = country_par,
+      q_k = q[[i]],
+      p_k = p_k[[i]],
+      target_rung_par_per_member = purchased_par_per_start_member,
+      population_start = population_start,
+      deaths = deaths,
+      population_end = population_end,
+      realized_p_k = realized_p_k,
+      next_rung_required_par = NA_real_,
+      mortality_credit_par = mortality_credit_par / length(curves),
+      per_survivor_maturity_value = per_survivor_maturity_value,
+      mortality_credit_per_survivor = mortality_credit_per_survivor,
+      survival_adjusted_par = country_par,
+      purchase_par = country_par,
+      priced_par = country_par,
+      zero_rate = as.numeric(zero_rates[curves]),
+      zero_rate_1y = as.numeric(zero_rates[curves]),
+      discount_factor = as.numeric(discount_factors[curves]),
+      purchase_cost = as.numeric(purchase_costs[curves]),
+      maturity_proceeds = country_par,
+      stringsAsFactors = FALSE
+    )
+
+    cash_accounts[[i]] <- data.frame(
+      model = model_name,
+      scenario = scenario_name,
+      scenario_type = scenario_type,
+      shock_label = shock_label,
+      rung_id = i,
+      purchase_year = purchase_years[[i]],
+      purchase_date = purchase_date,
+      maturity_date = maturity_date,
+      bond_maturity_years = bond_maturity_years,
+      initial_cash = initial_cash,
+      initial_rung_count = initial_rung_count,
+      reserve_cash_start = reserve_cash_start,
+      initial_cash_draw = initial_cash_draw,
+      reserve_cash_end = reserve_cash_end,
+      cash_start = carry_cash_start,
+      maturity_proceeds_from_prior = maturity_proceeds_from_prior,
+      available_cash = available_cash,
+      purchase_cost = rung_purchase_cost,
+      maturity_proceeds = rung_maturity_proceeds,
+      purchased_par = total_purchased_par,
+      target_rung_par_per_member = purchased_par_per_start_member,
+      population_start = population_start,
+      deaths = deaths,
+      population_end = population_end,
+      mortality_credit_par = mortality_credit_par,
+      rung_profit_loss = rung_profit_loss,
+      cumulative_profit_loss = cumulative_profit_loss,
+      cash_end = cash_end,
+      reserve_draw = pmax(-cash_end, 0),
+      stringsAsFactors = FALSE
+    )
+
+    reserve_cash_start <- reserve_cash_end
+    carry_cash_start <- cash_end
+  }
+
+  country_holdings <- do.call(rbind, country_holdings)
+  cash_accounts <- do.call(rbind, cash_accounts)
+  rownames(country_holdings) <- NULL
+  rownames(cash_accounts) <- NULL
+
+  list(
+    country_holdings = country_holdings,
+    cash_accounts = cash_accounts,
+    initial_cash = stats::setNames(initial_cash, model_name)
+  )
+}
+
+tontine_price_rolling_reinvestment_models <- function(baseline_curve_models, yields,
+                                                      reference_curve, purchase_years,
+                                                      curves, initial_cash, q,
+                                                      population_simulation = NULL,
+                                                      bond_maturity_years = 1,
+                                                      mat_names,
+                                                      scenario_type = "baseline",
+                                                      scenario_name_prefix = "Baseline",
+                                                      shock_label = NA_character_) {
+  model_valuations <- lapply(names(baseline_curve_models), function(model_name) {
+    model_obj <- baseline_curve_models[[model_name]]
+    tontine_build_rolling_reinvestment_ladder(
+      curve_panels = model_obj$curve_panels,
+      yields = yields,
+      reference_curve = reference_curve,
+      purchase_years = purchase_years,
+      curves = curves,
+      initial_cash = initial_cash,
+      q = q,
+      population_simulation = population_simulation,
+      bond_maturity_years = bond_maturity_years,
+      mat_names = mat_names,
+      model_name = model_obj$model,
+      scenario_name = paste(scenario_name_prefix, model_obj$model),
+      scenario_type = scenario_type,
+      shock_label = shock_label
+    )
+  })
+
+  country_holdings <- do.call(rbind, lapply(model_valuations, `[[`, "country_holdings"))
+  cash_accounts <- do.call(rbind, lapply(model_valuations, `[[`, "cash_accounts"))
+  initial_cash_by_model <- stats::setNames(
+    rep(initial_cash, length(model_valuations)),
+    vapply(model_valuations, function(valuation) {
+      unique(valuation$cash_accounts$model)
+    }, character(1))
+  )
+  rownames(country_holdings) <- NULL
+  rownames(cash_accounts) <- NULL
+
+  list(
+    country_holdings = country_holdings,
+    cash_accounts = cash_accounts,
+    initial_cash = initial_cash_by_model
+  )
+}
+
+tontine_build_annual_contribution_ladder <- function(curve_panels, yields, reference_curve,
+                                                     purchase_years, curves,
+                                                     annual_contribution_per_member,
+                                                     q, population_simulation = NULL,
+                                                     bond_maturity_years = 1,
+                                                     mat_names, model_name,
+                                                     scenario_name,
+                                                     scenario_type = "baseline",
+                                                     shock_label = NA_character_) {
+  if (!is.list(curve_panels) || is.null(names(curve_panels))) {
+    stop("`curve_panels` must be a named list of curve data frames.")
+  }
+
+  if (!is.list(yields) || is.null(names(yields)) || !reference_curve %in% names(yields)) {
+    stop("`yields` must be a named list containing `reference_curve`.")
+  }
+
+  if (!is.character(curves) || length(curves) == 0 || anyNA(curves) || any(!nzchar(curves))) {
+    stop("`curves` must be a non-empty character vector.")
+  }
+
+  missing_curves <- setdiff(curves, names(curve_panels))
+  if (length(missing_curves) > 0) {
+    stop("`curve_panels` is missing one or more ladder countries.")
+  }
+
+  if (!is.numeric(annual_contribution_per_member) ||
+      length(annual_contribution_per_member) != 1 ||
+      is.na(annual_contribution_per_member) ||
+      annual_contribution_per_member <= 0) {
+    stop("`annual_contribution_per_member` must be a positive numeric scalar.")
+  }
+
+  purchase_years <- as.integer(purchase_years)
+  bond_maturity_years <- tontine_validate_bond_maturity_years(bond_maturity_years)
+  q <- tontine_validate_probability_vector(q, purchase_years)
+  p_k <- cumprod(1 - q)
+  tenor_col <- tontine_bond_tenor_col(bond_maturity_years)
+
+  if (!tenor_col %in% mat_names) {
+    stop(sprintf("`mat_names` must include required ladder tenor column `%s`.", tenor_col))
+  }
+
+  if (!is.null(population_simulation)) {
+    required_population_cols <- c(
+      "rung_id", "q_k", "expected_p_k", "population_start",
+      "deaths", "population_end", "realized_p_k"
+    )
+
+    if (!all(required_population_cols %in% colnames(population_simulation))) {
+      stop("`population_simulation` must be created by `tontine_simulate_population()`.")
+    }
+
+    if (nrow(population_simulation) != length(purchase_years)) {
+      stop("`population_simulation` must contain one row per purchase year.")
+    }
+
+    if (!all(population_simulation$rung_id == seq_along(purchase_years))) {
+      stop("`population_simulation$rung_id` must align with `purchase_years`.")
+    }
+
+    if (any(abs(population_simulation$q_k - q) > sqrt(.Machine$double.eps))) {
+      stop("`population_simulation$q_k` must match `q`.")
+    }
+  }
+
+  reference_panel <- yields[[reference_curve]]
+  purchase_dates <- as.Date(vapply(purchase_years, function(year_value) {
+    as.character(tontine_first_observed_date(reference_panel, year_value))
+  }, character(1)))
+  maturity_dates <- as.Date(vapply(seq_along(purchase_years), function(i) {
+    as.character(tontine_resolve_maturity_date(
+      reference_panel = reference_panel,
+      purchase_date = purchase_dates[[i]],
+      maturity_year = purchase_years[[i]] + bond_maturity_years
+    ))
+  }, character(1)))
+
+  country_holdings <- vector("list", length(purchase_years))
+  payout_accounts <- vector("list", length(purchase_years))
+
+  for (i in seq_along(purchase_years)) {
+    purchase_date <- purchase_dates[[i]]
+    maturity_date <- maturity_dates[[i]]
+    population_start <- if (is.null(population_simulation)) {
+      NA_integer_
+    } else {
+      population_simulation$population_start[[i]]
+    }
+    deaths <- if (is.null(population_simulation)) {
+      NA_integer_
+    } else {
+      population_simulation$deaths[[i]]
+    }
+    population_end <- if (is.null(population_simulation)) {
+      NA_integer_
+    } else {
+      population_simulation$population_end[[i]]
+    }
+    realized_p_k <- if (is.null(population_simulation)) {
+      NA_real_
+    } else {
+      population_simulation$realized_p_k[[i]]
+    }
+
+    total_contribution <- population_start * annual_contribution_per_member
+    country_contribution <- total_contribution / length(curves)
+    zero_rates <- vapply(curves, function(country_name) {
+      tontine_extract_curve_rate(
+        curve_panel = curve_panels[[country_name]],
+        target_date = purchase_date,
+        tenor_col = tenor_col
+      ) / 100
+    }, numeric(1))
+    discount_factors <- exp(-zero_rates * bond_maturity_years)
+    country_par <- country_contribution / discount_factors
+    total_purchase_cost <- sum(rep(country_contribution, length(curves)))
+    total_maturity_proceeds <- sum(country_par)
+    gross_maturity_value_per_start_member <- total_maturity_proceeds / population_start
+    survivor_payout_per_member <- if (!is.na(population_end) && population_end > 0) {
+      total_maturity_proceeds / population_end
+    } else {
+      NA_real_
+    }
+    investment_gain_per_start_member <-
+      gross_maturity_value_per_start_member - annual_contribution_per_member
+    mortality_credit_per_survivor <-
+      survivor_payout_per_member - gross_maturity_value_per_start_member
+    total_mortality_credit <- deaths * gross_maturity_value_per_start_member
+
+    country_holdings[[i]] <- data.frame(
+      model = model_name,
+      scenario = scenario_name,
+      scenario_type = scenario_type,
+      shock_label = shock_label,
+      rung_id = i,
+      purchase_year = purchase_years[[i]],
+      purchase_date = purchase_date,
+      maturity_date = maturity_date,
+      bond_maturity_years = bond_maturity_years,
+      tenor_col = tenor_col,
+      country = curves,
+      q_k = q[[i]],
+      p_k = p_k[[i]],
+      annual_contribution_per_member = annual_contribution_per_member,
+      population_start = population_start,
+      deaths = deaths,
+      population_end = population_end,
+      realized_p_k = realized_p_k,
+      total_contribution = total_contribution,
+      country_contribution = country_contribution,
+      country_par = as.numeric(country_par[curves]),
+      survival_adjusted_par = as.numeric(country_par[curves]),
+      purchase_par = as.numeric(country_par[curves]),
+      priced_par = as.numeric(country_par[curves]),
+      zero_rate = as.numeric(zero_rates[curves]),
+      zero_rate_1y = as.numeric(zero_rates[curves]),
+      discount_factor = as.numeric(discount_factors[curves]),
+      purchase_cost = rep(country_contribution, length(curves)),
+      maturity_proceeds = as.numeric(country_par[curves]),
+      country_gross_maturity_value_per_start_member =
+        as.numeric(country_par[curves]) / population_start,
+      country_survivor_payout_per_member =
+        as.numeric(country_par[curves]) / population_end,
+      stringsAsFactors = FALSE
+    )
+
+    payout_accounts[[i]] <- data.frame(
+      model = model_name,
+      scenario = scenario_name,
+      scenario_type = scenario_type,
+      shock_label = shock_label,
+      rung_id = i,
+      purchase_year = purchase_years[[i]],
+      purchase_date = purchase_date,
+      maturity_date = maturity_date,
+      bond_maturity_years = bond_maturity_years,
+      q_k = q[[i]],
+      p_k = p_k[[i]],
+      annual_contribution_per_member = annual_contribution_per_member,
+      population_start = population_start,
+      deaths = deaths,
+      population_end = population_end,
+      realized_p_k = realized_p_k,
+      total_contribution = total_contribution,
+      purchase_cost = total_purchase_cost,
+      maturity_proceeds = total_maturity_proceeds,
+      bond_profit_loss = total_maturity_proceeds - total_purchase_cost,
+      gross_maturity_value_per_start_member = gross_maturity_value_per_start_member,
+      investment_gain_per_start_member = investment_gain_per_start_member,
+      survivor_payout_per_member = survivor_payout_per_member,
+      mortality_credit_per_survivor = mortality_credit_per_survivor,
+      total_mortality_credit = total_mortality_credit,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  country_holdings <- do.call(rbind, country_holdings)
+  payout_accounts <- do.call(rbind, payout_accounts)
+  rownames(country_holdings) <- NULL
+  rownames(payout_accounts) <- NULL
+
+  list(
+    country_holdings = country_holdings,
+    payout_accounts = payout_accounts
+  )
+}
+
+tontine_price_annual_contribution_models <- function(baseline_curve_models, yields,
+                                                     reference_curve,
+                                                     purchase_years, curves,
+                                                     annual_contribution_per_member,
+                                                     q,
+                                                     population_simulation = NULL,
+                                                     bond_maturity_years = 1,
+                                                     mat_names,
+                                                     scenario_type = "baseline",
+                                                     scenario_name_prefix = "Baseline",
+                                                     shock_label = NA_character_) {
+  model_valuations <- lapply(names(baseline_curve_models), function(model_name) {
+    model_obj <- baseline_curve_models[[model_name]]
+    tontine_build_annual_contribution_ladder(
+      curve_panels = model_obj$curve_panels,
+      yields = yields,
+      reference_curve = reference_curve,
+      purchase_years = purchase_years,
+      curves = curves,
+      annual_contribution_per_member = annual_contribution_per_member,
+      q = q,
+      population_simulation = population_simulation,
+      bond_maturity_years = bond_maturity_years,
+      mat_names = mat_names,
+      model_name = model_obj$model,
+      scenario_name = paste(scenario_name_prefix, model_obj$model),
+      scenario_type = scenario_type,
+      shock_label = shock_label
+    )
+  })
+
+  country_holdings <- do.call(rbind, lapply(model_valuations, `[[`, "country_holdings"))
+  payout_accounts <- do.call(rbind, lapply(model_valuations, `[[`, "payout_accounts"))
+  rownames(country_holdings) <- NULL
+  rownames(payout_accounts) <- NULL
+
+  list(
+    country_holdings = country_holdings,
+    payout_accounts = payout_accounts
+  )
 }
 
 #############################################

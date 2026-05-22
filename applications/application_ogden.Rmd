@@ -1,9 +1,763 @@
 ---
-title: "application_ogden"
-date: "2026-04-22"
+title: "Ogden Cashflow Matching Baseline"
+date: "2026-05-14"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Purpose
+
+This notebook builds the Ogden baseline cashflow structure. The current version
+only constructs deterministic liability cashflows, tenor-specific capped GMV
+country weights, and an inception asset portfolio whose future cashflows match
+the liability cashflows.
+
+```{r libraries}
+library(here)
+library(dplyr)
+library(purrr)
+library(tibble)
+library(ggplot2)
+library(patchwork)
+library(Matrix)
+library(vars)
+library(tsDyn)
+
+sys.source(here::here("core_formatting.R"), envir = .GlobalEnv)
+sys.source(here::here("applications", "tontine_helpers.R"), envir = .GlobalEnv)
+sys.source(here::here("applications", "ogden_helpers.R"), envir = .GlobalEnv)
+tontine_source_project()
+```
+
+```{r configuration}
+curve_files <- list(
+  gbr = "gbr-bs.csv",
+  usa = "usa-bs.csv",
+  ger = "ger-bs.csv",
+  fra = "fra-bs.csv"
+)
+
+curves <- names(curve_files)
+reference_curve <- "gbr"
+
+mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360)
+mat_names <- tontine_mat_names(mats)
+
+data_start_date <- as.Date("2010-01-01")
+data_end_date <- as.Date("2021-12-31")
+
+valuation_years <- 2011:2020
+lookback_years <- 1
+lambdas <- seq(0.01, 0.15, by = 0.005)
+cutoffs <- c(4, 8)
+fit_seed <- 999
+baseline_model_names <- c("DNS", "DLY", "MCE")
+
+mce_baseline_controls <- list(
+  ECM_alpha = 0.2,
+  X_trunc = TRUE,
+  Xt_smooth = FALSE,
+  smoother = NULL,
+  CR_S0_shrink_diag = 0.4,
+  CR_check_every = 10,
+  CR_use_loglik = FALSE,
+  CR_store_path = FALSE
+)
+
+mce_shock_controls <- list(
+  reuse_ECM = TRUE,
+  reuse_BS0 = TRUE,
+  ECM_fallback = "baseline"
+)
+
+M_0 <- 1000
+liability_b0 <- 100000
+liability_escalation_rate <- 0.02
+
+payment_years <- 2011:2030
+liability_horizons <- seq_along(payment_years)
+
+q <- c(
+  0.013404, 0.014795, 0.016280, 0.017595, 0.019527,
+  0.021506, 0.023614, 0.025473, 0.027789, 0.030319,
+  0.033748, 0.037142, 0.042361, 0.046881, 0.052665,
+  0.059666, 0.067996, 0.075244, 0.084093, 0.093857
+)
+stopifnot(length(q) == length(payment_years))
+
+gmv_calibration_start <- as.Date("2010-01-01")
+gmv_calibration_end <- as.Date("2011-01-01")
+gmv_weight_floor <- 0.10
+gmv_weight_ceiling <- 0.50
+```
+
+```{r data}
+yields <- tontine_read_yields(
+  curve_files = curve_files,
+  start_date = data_start_date,
+  end_date = data_end_date
+)
+
+asset_purchase_date <- tontine_first_observed_date(
+  curve_df = yields[[reference_curve]],
+  year_value = min(payment_years)
+)
+
+asset_purchase_date
+```
+
+```{r valuation-windows}
+valuation_windows <- tontine_build_valuation_windows(
+  yields = yields,
+  reference_curve = reference_curve,
+  purchase_years = valuation_years,
+  lookback_years = lookback_years,
+  date_position = "last"
+)
+
+valuation_windows %>%
+  transmute(
+    valuation_index = rung_id,
+    valuation_year = purchase_year,
+    valuation_date = purchase_date,
+    estimation_start,
+    estimation_end,
+    n_reference_observations
+  )
+```
+
+## Liability Cashflows
+
+Claimant counts use the multiplicative survival convention. Per-claimant
+payments follow \(b_k = b_0(1 + g_b)^k\).
+
+```{r liability-cashflows}
+liability_cashflows <- ogden_build_liability_cashflows(
+  M_0 = M_0,
+  q = q,
+  b0 = liability_b0,
+  g_b = liability_escalation_rate,
+  payment_years = payment_years
+)
+
+liability_cashflows
+```
+
+## Capped GMV Weights
+
+Country allocations are estimated tenor-by-tenor from zero-coupon bond
+log-return covariance over 2010-01-01 through 2011-01-01. Each country weight is
+constrained to lie between 10% and 50%.
+
+```{r gmv-weights}
+cashflow_gmv_weights <- ogden_estimate_gmv_weights(
+  yields = yields,
+  curves = curves,
+  horizons = liability_horizons,
+  start_date = gmv_calibration_start,
+  end_date = gmv_calibration_end,
+  mats = mats,
+  mat_names = mat_names,
+  weight_floor = gmv_weight_floor,
+  weight_ceiling = gmv_weight_ceiling
+)
+
+cashflow_gmv_weights
+```
+
+## Cashflow-Matched Asset Portfolio
+
+At the first trading day of 2011, the asset portfolio purchases country-specific
+zero-coupon instruments for each liability horizon. For each horizon, country
+par values are set by the capped GMV weights, and total par equals the
+corresponding liability cashflow.
+
+```{r asset-portfolio}
+observed_asset_portfolio <- ogden_build_cashflow_matched_assets(
+  liability_cashflows = liability_cashflows,
+  portfolio_weights = cashflow_gmv_weights,
+  curve_panels = yields,
+  purchase_date = asset_purchase_date,
+  mats = mats,
+  mat_names = mat_names
+)
+
+asset_cashflow_match_summary <- ogden_summarise_asset_cashflow_match(
+  observed_asset_portfolio
+)
+
+asset_purchase_summary <- ogden_summarise_asset_purchase(observed_asset_portfolio)
+
+observed_asset_portfolio
+asset_cashflow_match_summary
+asset_purchase_summary
+```
+
+## Baseline Model Valuations
+
+DNS and DLY models are estimated over annual one-year lookback windows. Asset
+and liability values are measured immediately before the annual cashflow date,
+so the current-year cashflow is included at par.
+
+```{r baseline-model-fits}
+baseline_curve_models <- tontine_fit_rolling_baseline_curve_models(
+  yields = yields,
+  valuation_windows = valuation_windows,
+  curves = curves,
+  mats = mats,
+  mat_names = mat_names,
+  lambdas = lambdas,
+  cutoffs = cutoffs,
+  reference_curve = reference_curve,
+  mce_controls = mce_baseline_controls,
+  include_models = baseline_model_names,
+  fit_seed = fit_seed
+)
+
+baseline_fit_summary <- imap_dfr(baseline_curve_models, function(model_obj, model_key) {
+  tibble(
+    model = model_obj$model,
+    n_windows = length(model_obj$fit),
+    first_valuation_year = min(model_obj$valuation_windows$purchase_year),
+    last_valuation_year = max(model_obj$valuation_windows$purchase_year),
+    curves = paste(toupper(curves), collapse = ", "),
+    reference_curve = toupper(reference_curve)
+  )
+})
+
+baseline_fit_summary
+```
+
+```{r baseline-model-valuations}
+baseline_curve_panel_sets <- ogden_build_curve_panel_sets(
+  observed_yields = yields,
+  baseline_curve_models = baseline_curve_models,
+  model_order = c("Observed", "DNS", "DLY", "MCE")
+)
+
+baseline_asset_valuation_summary <- ogden_value_assets_by_model(
+  asset_portfolio = observed_asset_portfolio,
+  valuation_windows = valuation_windows,
+  curve_panel_sets = baseline_curve_panel_sets,
+  curves = curves,
+  mats = mats,
+  mat_names = mat_names
+)
+
+baseline_liability_valuation_summary <- ogden_value_liabilities_by_model(
+  liability_cashflows = liability_cashflows,
+  valuation_windows = valuation_windows,
+  portfolio_weights = cashflow_gmv_weights,
+  curve_panel_sets = baseline_curve_panel_sets,
+  curves = curves,
+  mats = mats,
+  mat_names = mat_names
+)
+
+baseline_valuation_summary <- ogden_summarise_model_valuations(
+  asset_valuation_summary = baseline_asset_valuation_summary,
+  liability_valuation_summary = baseline_liability_valuation_summary
+)
+
+baseline_asset_valuation_summary
+baseline_liability_valuation_summary
+baseline_valuation_summary
+```
+
+## Baseline Surplus / Shortfall
+
+```{r baseline-surplus-shortfall-plot, fig.width=10, fig.height=6}
+ogden_full_model_palette <- c(
+  Observed = "#7E6A9E",
+  DNS = "#4C78A8",
+  DLY = "#59A14F",
+  MCE = "#C94C4C"
+)
+
+baseline_surplus_shortfall_plot_data <- baseline_valuation_summary %>%
+  mutate(model = factor(model, levels = c("Observed", "DNS", "DLY", "MCE")))
+
+baseline_surplus_shortfall_y_limit <- max(
+  abs(baseline_surplus_shortfall_plot_data$surplus_loss),
+  na.rm = TRUE
+)
+
+ogden_baseline_surplus_shortfall_plot <- ggplot(
+  baseline_surplus_shortfall_plot_data,
+  aes(x = valuation_year, y = surplus_loss, color = model)
+) +
+  geom_hline(yintercept = 0, color = "grey40", linewidth = 0.35) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  scale_color_manual(values = ogden_full_model_palette, drop = FALSE) +
+  scale_x_continuous(breaks = valuation_years) +
+  scale_y_continuous(
+    labels = scales::dollar,
+    limits = c(
+      -baseline_surplus_shortfall_y_limit,
+      baseline_surplus_shortfall_y_limit
+    )
+  ) +
+  labs(
+    title = "Insurer Portfolio Baseline Surplus / Shortfall by Year",
+    x = "Valuation Year",
+    y = "Surplus / Shortfall",
+    color = "Model"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+ogden_baseline_surplus_shortfall_plot
+```
+
+## Persistent GBR Level Shock
+
+The first shock experiment applies a persistent latent level-factor shock to GBR
+from the 2012 annual lookback window onward. The scaffold supports -100 BPS and
+-200 BPS shocks and valuation reporting from 2013 through 2020. To keep
+execution lightweight while testing, `active_shock_key` and
+`active_reporting_years` select the single shock/year subset to fit.
+
+```{r gbr-persistent-shock-setup}
+shock_reporting_years <- 2013:2015
+active_shock_key <- "gbr_l_neg200bps_2012_2015"
+active_reporting_years <- shock_reporting_years
+
+shock_fit_windows <- valuation_windows %>%
+  filter(purchase_year %in% c(2012, active_reporting_years))
+
+shock_reporting_windows <- valuation_windows %>%
+  filter(purchase_year %in% active_reporting_years)
+
+gbr_persistent_shock_specs <- list(
+  gbr_l_neg100bps_2012_2015 = list(
+    label = "GBR L -100 BPS 2012-2015",
+    shock_start_year = 2012,
+    shock_start_anchor = "estimation_start",
+    shock_end_year = max(active_reporting_years),
+    shock_end_anchor = "estimation_end",
+    shock_profile = "linear_decay",
+    shock_start_magnitude = -1,
+    shock_end_magnitude = -1,
+    shock_effect_timing = "calendar",
+    shock_curves = "gbr",
+    shock_factors = "L",
+    shock_magnitude = -1,
+    shock_type = "additive"
+  ),
+  gbr_l_neg200bps_2012_2015 = list(
+    label = "GBR L -200 BPS 2012-2015",
+    shock_start_year = 2012,
+    shock_start_anchor = "estimation_start",
+    shock_end_year = max(active_reporting_years),
+    shock_end_anchor = "estimation_end",
+    shock_profile = "linear_decay",
+    shock_start_magnitude = -2,
+    shock_end_magnitude = -2,
+    shock_effect_timing = "calendar",
+    shock_curves = "gbr",
+    shock_factors = "L",
+    shock_magnitude = -2,
+    shock_type = "additive"
+  )
+)
+
+active_shock_spec <- gbr_persistent_shock_specs[[active_shock_key]]
+active_shock_specs <- gbr_persistent_shock_specs[active_shock_key]
+
+liability_dislocation_gamma <- 0.50
+liability_dislocation_psi_1 <- abs(active_shock_spec$shock_magnitude) / 100 *
+  liability_dislocation_gamma
+liability_dislocation_psi_2 <- 0
+
+liability_dislocation_gamma_scenarios <- tibble(
+  dislocation_case = c("0.25x shock magnitude", "0.50x shock magnitude"),
+  gamma_value = c(0.25, 0.50),
+  psi_1 = abs(active_shock_spec$shock_magnitude) / 100 *
+    gamma_value,
+  psi_2 = 0
+)
+
+mce_dislocation_scale_scenarios <- tibble(
+  valuation_case = c("Shocked exogenous dislocation", "Shocked hybrid dislocation"),
+  mce_scale_case = c(
+    "0.00x MCE residual transmission",
+    "1.00x MCE residual transmission"
+  ),
+  mce_scale_value = c(0.00, 1.00)
+)
+
+gbr_persistent_shock_specs
+active_shock_key
+active_reporting_years
+shock_fit_windows
+shock_reporting_windows
+liability_dislocation_gamma_scenarios
+mce_dislocation_scale_scenarios
+```
+
+```{r gbr-persistent-shock-fits}
+set.seed(fit_seed)
+
+gbr_persistent_shock_curve_models <- purrr::imap(active_shock_specs, function(shock_spec, shock_key) {
+  tontine_fit_rolling_shocked_curve_models(
+    yields = yields,
+    valuation_windows = shock_fit_windows,
+    curves = curves,
+    mats = mats,
+    mat_names = mat_names,
+    lambdas = lambdas,
+    cutoffs = cutoffs,
+    reference_curve = reference_curve,
+    shock_spec = shock_spec,
+    mce_controls = mce_baseline_controls,
+    mce_shock_controls = mce_shock_controls,
+    include_models = baseline_model_names,
+    fit_seed = fit_seed
+  )
+})
+
+names(gbr_persistent_shock_curve_models)
+```
+
+```{r gbr-persistent-shock-valuations}
+gbr_persistent_shock_valuation_summary <- purrr::imap_dfr(
+  gbr_persistent_shock_curve_models,
+  function(shock_models, shock_key) {
+    shock_spec <- gbr_persistent_shock_specs[[shock_key]]
+    shock_curve_panel_sets <- ogden_build_curve_panel_sets(
+      observed_yields = yields,
+      baseline_curve_models = shock_models,
+      model_order = baseline_model_names
+    )
+
+    shock_asset_values <- ogden_value_assets_by_model(
+      asset_portfolio = observed_asset_portfolio,
+      valuation_windows = shock_reporting_windows,
+      curve_panel_sets = shock_curve_panel_sets,
+      curves = curves,
+      mats = mats,
+      mat_names = mat_names
+    )
+
+    shock_liability_values <- ogden_value_liabilities_by_model(
+      liability_cashflows = liability_cashflows,
+      valuation_windows = shock_reporting_windows,
+      portfolio_weights = cashflow_gmv_weights,
+      curve_panel_sets = shock_curve_panel_sets,
+      curves = curves,
+      mats = mats,
+      mat_names = mat_names
+    )
+
+    shock_liability_values_with_dislocation <- ogden_value_liabilities_by_model(
+      liability_cashflows = liability_cashflows,
+      valuation_windows = shock_reporting_windows,
+      portfolio_weights = cashflow_gmv_weights,
+      curve_panel_sets = shock_curve_panel_sets,
+      curves = curves,
+      mats = mats,
+      mat_names = mat_names,
+      psi_1 = liability_dislocation_psi_1,
+      psi_2 = liability_dislocation_psi_2,
+      psi_max_horizon = max(liability_horizons)
+    )
+
+    ogden_summarise_model_valuations(
+      asset_valuation_summary = shock_asset_values,
+      liability_valuation_summary = shock_liability_values
+    ) %>%
+      rename(
+        market_liability_present_value = liability_present_value,
+        market_surplus_loss = surplus_loss,
+        market_funding_ratio = funding_ratio
+      ) %>%
+      left_join(
+        shock_liability_values_with_dislocation %>%
+          dplyr::select(
+            model,
+            valuation_index,
+            valuation_year,
+            valuation_date,
+            liability_present_value_with_dislocation = liability_present_value
+          ),
+        by = c("model", "valuation_index", "valuation_year", "valuation_date")
+      ) %>%
+      mutate(
+        liability_present_value = liability_present_value_with_dislocation,
+        surplus_loss = asset_present_value - liability_present_value,
+        funding_ratio = asset_present_value / liability_present_value,
+        liability_dislocation_increment =
+          liability_present_value_with_dislocation - market_liability_present_value
+      ) %>%
+      dplyr::select(-liability_present_value_with_dislocation) %>%
+      mutate(
+        shock_key = shock_key,
+        shock_label = shock_spec$label,
+        .before = 1
+      )
+  }
+)
+
+gbr_persistent_shock_delta_summary <- gbr_persistent_shock_valuation_summary %>%
+  inner_join(
+    baseline_valuation_summary %>%
+      filter(valuation_year %in% shock_reporting_windows$purchase_year, model %in% baseline_model_names) %>%
+      dplyr::select(
+        model,
+        valuation_year,
+        baseline_asset_present_value = asset_present_value,
+        baseline_liability_present_value = liability_present_value,
+        baseline_surplus_loss = surplus_loss,
+        baseline_funding_ratio = funding_ratio
+      ),
+    by = c("model", "valuation_year")
+  ) %>%
+  mutate(
+    asset_pv_delta = asset_present_value - baseline_asset_present_value,
+    liability_pv_delta = liability_present_value - baseline_liability_present_value,
+    market_liability_pv_delta =
+      market_liability_present_value - baseline_liability_present_value,
+    surplus_delta = surplus_loss - baseline_surplus_loss,
+    market_surplus_delta = market_surplus_loss - baseline_surplus_loss,
+    funding_ratio_delta = funding_ratio - baseline_funding_ratio
+  ) %>%
+  arrange(shock_key, model)
+
+gbr_persistent_shock_valuation_summary
+gbr_persistent_shock_delta_summary
+```
+
+## 2013 Shock Liability Dislocation Sensitivity
+
+This block tests shocked liability dislocations for the 2013 window only. The
+MCE residual-transmission mechanism is used as a pseudo-independent dislocation
+generator, and the resulting dislocation panel is applied to liability valuation
+under DNS, DLY, and MCE model curves. The exogenous case uses the same hybrid
+machinery with MCE scale set to zero.
+
+```{r mce-model-based-dislocation-2013}
+mce_model_dislocation_test_windows <- shock_reporting_windows
+
+active_shock_models <- gbr_persistent_shock_curve_models[[active_shock_key]]
+
+shock_model_curve_panel_sets <- ogden_build_curve_panel_sets(
+  observed_yields = yields,
+  baseline_curve_models = active_shock_models,
+  model_order = baseline_model_names
+)
+
+shock_model_assets <- ogden_value_assets_by_model(
+  asset_portfolio = observed_asset_portfolio,
+  valuation_windows = mce_model_dislocation_test_windows,
+  curve_panel_sets = shock_model_curve_panel_sets,
+  curves = curves,
+  mats = mats,
+  mat_names = mat_names
+)
+
+mce_dislocation_sensitivity_grid <- tidyr::crossing(
+  liability_dislocation_gamma_scenarios,
+  mce_dislocation_scale_scenarios
+)
+
+mce_dislocation_sensitivity_comparison <- purrr::pmap_dfr(
+  mce_dislocation_sensitivity_grid,
+  function(dislocation_case, gamma_value, psi_1, psi_2,
+           valuation_case, mce_scale_case, mce_scale_value) {
+    gamma_mce_psi_panel <- ogden_shock_psi(
+      baseline_mce_model = baseline_curve_models$MCE,
+      shocked_mce_model = active_shock_models$MCE,
+      valuation_windows = mce_model_dislocation_test_windows,
+      curves = curves,
+      mats = mats,
+      mat_names = mat_names,
+      reference_curve = reference_curve,
+      liability_horizons = 0:max(liability_horizons),
+      dislocation_scale = mce_scale_value
+    )
+
+    gamma_hybrid_psi_panel <- ogden_hybrid_shock_psi(
+      mce_psi_panel = gamma_mce_psi_panel,
+      exogenous_psi_1 = psi_1,
+      exogenous_psi_2 = psi_2,
+      psi_max_horizon = max(liability_horizons)
+    )
+
+    gamma_hybrid_psi_panel_by_model <- purrr::map_dfr(
+      baseline_model_names,
+      function(model_name) {
+        gamma_hybrid_psi_panel %>%
+          mutate(model = model_name)
+      }
+    )
+
+    gamma_hybrid_liabilities <- ogden_value_liabilities_by_model(
+      liability_cashflows = liability_cashflows,
+      valuation_windows = mce_model_dislocation_test_windows,
+      portfolio_weights = cashflow_gmv_weights,
+      curve_panel_sets = shock_model_curve_panel_sets,
+      curves = curves,
+      mats = mats,
+      mat_names = mat_names,
+      psi_panel = gamma_hybrid_psi_panel_by_model
+    )
+
+    ogden_summarise_model_valuations(
+      asset_valuation_summary = shock_model_assets,
+      liability_valuation_summary = gamma_hybrid_liabilities
+    ) %>%
+      mutate(valuation_case = valuation_case, .before = 1) %>%
+      mutate(
+        dislocation_case = dislocation_case,
+        dislocation_gamma = gamma_value,
+        mce_scale_case = mce_scale_case,
+        mce_dislocation_scale = mce_scale_value,
+        shock_key = active_shock_key,
+        shock_label = active_shock_spec$label,
+        shock_bps = active_shock_spec$shock_magnitude * 100,
+        .before = 1
+      )
+  }
+) %>%
+  mutate(
+    valuation_case = factor(
+      valuation_case,
+      levels = c(
+        "Shocked exogenous dislocation",
+        "Shocked hybrid dislocation"
+      )
+    )
+  ) %>%
+  arrange(dislocation_gamma, mce_dislocation_scale, valuation_case) %>%
+  mutate(valuation_case = as.character(valuation_case))
+
+mce_dislocation_sensitivity_deltas <- mce_dislocation_sensitivity_comparison %>%
+  inner_join(
+    baseline_valuation_summary %>%
+      filter(valuation_year %in% active_reporting_years, model %in% baseline_model_names) %>%
+      dplyr::select(
+        model,
+        valuation_year,
+        baseline_asset_present_value = asset_present_value,
+        baseline_liability_present_value = liability_present_value,
+        baseline_surplus_loss = surplus_loss,
+        baseline_funding_ratio = funding_ratio
+      ),
+    by = c("model", "valuation_year")
+  ) %>%
+  transmute(
+    shock_key,
+    shock_label,
+    shock_bps,
+    valuation_year,
+    model,
+    dislocation_case,
+    valuation_case,
+    asset_pv_delta = asset_present_value - baseline_asset_present_value,
+    liability_pv_delta = liability_present_value - baseline_liability_present_value,
+    surplus_loss_delta = surplus_loss - baseline_surplus_loss,
+    funding_ratio_delta = funding_ratio - baseline_funding_ratio
+  ) %>%
+  arrange(dislocation_case, valuation_case, model)
+
+mce_dislocation_sensitivity_comparison
+mce_dislocation_sensitivity_deltas
+```
+
+## Shock Valuation Delta Plots
+
+```{r shock-valuation-delta-plots, fig.width=12, fig.height=8}
+shock_delta_plot_data <- mce_dislocation_sensitivity_deltas %>%
+  mutate(
+    model = factor(model, levels = c("DNS", "DLY", "MCE")),
+    valuation_year = factor(valuation_year),
+    valuation_case = recode(
+      valuation_case,
+      "Shocked exogenous dislocation" = "Exogenous",
+      "Shocked hybrid dislocation" = "Hybrid"
+    ),
+    scenario_label = paste(dislocation_case, valuation_case, sep = ", ")
+  )
+
+ogden_model_palette <- c(
+  DNS = "#4C78A8",
+  DLY = "#59A14F",
+  MCE = "#C94C4C"
+)
+
+ogden_asset_liability_delta_y_limits <- c(0, 200000000)
+ogden_surplus_shortfall_delta_y_limits <- c(-60000000, 5000000)
+
+asset_liability_delta_plot_data <- shock_delta_plot_data %>%
+  dplyr::select(
+    valuation_year,
+    model,
+    scenario_label,
+    asset_pv_delta,
+    liability_pv_delta
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(asset_pv_delta, liability_pv_delta),
+    names_to = "delta_type",
+    values_to = "pv_delta"
+  ) %>%
+  mutate(
+    delta_type = recode(
+      delta_type,
+      asset_pv_delta = "Asset PV Delta",
+      liability_pv_delta = "Liability PV Delta"
+    )
+  )
+
+ogden_asset_liability_delta_plot <- ggplot(
+  asset_liability_delta_plot_data,
+  aes(x = model, y = pv_delta, fill = delta_type)
+) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.65) +
+  facet_grid(valuation_year ~ scenario_label) +
+  scale_y_continuous(
+    labels = scales::dollar,
+    limits = ogden_asset_liability_delta_y_limits
+  ) +
+  labs(
+    title = "Asset vs Liability PV Delta by Shock Scenario",
+    x = "Model",
+    y = "PV Delta",
+    fill = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+ogden_surplus_delta_plot <- ggplot(
+  shock_delta_plot_data,
+  aes(x = model, y = surplus_loss_delta, fill = model)
+) +
+  geom_col(width = 0.65, show.legend = FALSE) +
+  geom_hline(yintercept = 0, color = "grey40", linewidth = 0.3) +
+  facet_grid(valuation_year ~ scenario_label) +
+  scale_fill_manual(values = ogden_model_palette, drop = FALSE) +
+  scale_y_continuous(
+    labels = scales::dollar,
+    limits = ogden_surplus_shortfall_delta_y_limits
+  ) +
+  labs(
+    title = "Surplus / Shortfall Delta by Shock Scenario",
+    x = "Model",
+    y = "Surplus / Shortfall Delta"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ogden_shock_delta_plot <- ogden_asset_liability_delta_plot /
+  ogden_surplus_delta_plot +
+  plot_layout(heights = c(1, 1))
+
+ogden_shock_delta_plot
 ```

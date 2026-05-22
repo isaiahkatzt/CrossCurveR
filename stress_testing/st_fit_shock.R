@@ -194,7 +194,8 @@ st_build_shocked_curve_state <- function(single_curve_state, shocked_factors) {
     colnames(shocked_beta) <- factor_names
 
     shocked_nsfit <- shocked_beta %*% curve_phi$phi
-    shocked_matrix_yield <- shocked_nsfit - baseline_nsfit$W
+    # Shocked curve panels are measured against the independent DNS fit path.
+    shocked_matrix_yield <- shocked_nsfit
 
     list(
       phi = curve_phi,
@@ -265,6 +266,60 @@ st_apply_factor_shock <- function(curves, curve_dns_factor,
   )
 }
 
+st_apply_factor_shock_profile <- function(curves, curve_dns_factor,
+                                          shock_curves, shock_factors,
+                                          shock_magnitudes,
+                                          shock_type = c("additive", "multiplicative")) {
+  shock_type <- match.arg(shock_type)
+
+  if (!is.list(curve_dns_factor) || length(curve_dns_factor) == 0 ||
+      is.null(names(curve_dns_factor))) {
+    stop("`curve_dns_factor` must be a non-empty named list.")
+  }
+  if (length(shock_factors) != 1) {
+    stop("Profile shocks currently support one shocked factor at a time.")
+  }
+  if (!all(shock_curves %in% curves)) {
+    stop("`shock_curves` must be a subset of `curves`.")
+  }
+
+  factor_dim <- ncol(as.matrix(curve_dns_factor[[1]]))
+  model_factors <- st_factor_names(factor_dim)
+  if (!shock_factors %in% model_factors) {
+    stop("`shock_factors` must be compatible with the model factor dimension.")
+  }
+
+  factor_idx <- match(shock_factors, model_factors)
+  shock_magnitudes <- as.numeric(shock_magnitudes)
+
+  shocked_curve_dns_factor <- setNames(lapply(names(curve_dns_factor), function(curve_name) {
+    curve_factor_mat <- as.matrix(curve_dns_factor[[curve_name]])
+    if (nrow(curve_factor_mat) != length(shock_magnitudes)) {
+      stop("Shock profile length must match the number of factor rows.")
+    }
+    if (ncol(curve_factor_mat) != factor_dim) {
+      stop("All `curve_dns_factor` entries must have the same number of columns.")
+    }
+
+    shocked_mat <- curve_factor_mat
+    if (curve_name %in% shock_curves) {
+      if (shock_type == "additive") {
+        shocked_mat[, factor_idx] <- curve_factor_mat[, factor_idx] + shock_magnitudes
+      } else {
+        shocked_mat[, factor_idx] <- curve_factor_mat[, factor_idx] * (1 + shock_magnitudes)
+      }
+    }
+
+    colnames(shocked_mat) <- model_factors
+    shocked_mat
+  }), names(curve_dns_factor))
+
+  list(
+    shock_profile = shock_magnitudes,
+    shocked_factors = shocked_curve_dns_factor
+  )
+}
+
 st_dns_shock_from_single_curve_state <- function(single_curve_state,
                                                  shock_curves, shock_factors, shock_magnitude,
                                                  shock_type = c("additive", "multiplicative"),
@@ -312,97 +367,6 @@ st_build_shocked_dly_single_curve <- function(dly_single_curve, shocked_factors,
   }), curves)
 }
 
-st_dly_curve_yields_from_single_curve <- function(dly_single_curve,
-                                                  curves = names(dly_single_curve)) {
-  setNames(lapply(curves, function(curve_name) {
-    curve_state <- dly_single_curve[[curve_name]]
-    curve_df <- data.frame(
-      time = curve_state$time,
-      as.data.frame(curve_state$betas$m_yield),
-      check.names = FALSE
-    )
-    colnames(curve_df) <- c("time", curve_state$yield_names)
-    curve_df
-  }), curves)
-}
-
-st_dly_shock_refit_core <- function(dly_fit_obj,
-                                    shock_curves, shock_factors, shock_magnitude,
-                                    shock_type, shock_window = NULL,
-                                    shock_window_position = c("first", "last"),
-                                    lambdas = NULL) {
-  lambda_grid <- lambdas
-  if (is.null(lambda_grid) && !is.null(dly_fit_obj$lambda_grid)) {
-    lambda_grid <- dly_fit_obj$lambda_grid
-  }
-
-  if (is.null(lambda_grid)) {
-    stop("`lambdas` must be supplied unless `dly_fit_obj` stores `lambda_grid`.")
-  }
-
-  shock_fit <- st_apply_factor_shock(
-    curves = dly_fit_obj$curves,
-    curve_dns_factor = dly_pull_beta(dly_fit_obj$single_curve, curves = dly_fit_obj$curves),
-    shock_curves = shock_curves,
-    shock_factors = shock_factors,
-    shock_magnitude = shock_magnitude,
-    shock_type = shock_type,
-    shock_window = shock_window,
-    shock_window_position = shock_window_position
-  )
-
-  shocked_single_curve <- st_build_shocked_dly_single_curve(
-    dly_single_curve = dly_fit_obj$single_curve,
-    shocked_factors = shock_fit$shocked_factors,
-    curves = dly_fit_obj$curves
-  )
-  shocked_yields <- st_dly_curve_yields_from_single_curve(
-    dly_single_curve = shocked_single_curve,
-    curves = dly_fit_obj$curves
-  )
-
-  shocked_fit <- dly_fit(
-    yields = shocked_yields,
-    mats = dly_fit_obj$mats,
-    lambdas = lambda_grid,
-    curves = dly_fit_obj$curves,
-    reference = dly_fit_obj$reference,
-    center = dly_fit_obj$center,
-    scale. = dly_fit_obj$scale.
-  )
-
-  return(list(
-    fit = shocked_fit,
-    yields = shocked_yields,
-    shock_matrix = shock_fit$shock_matrix,
-    shocked_factors = shock_fit$shocked_factors,
-    shocked_single_curve = shocked_single_curve,
-    baseline_fit = dly_fit_obj
-  ))
-}
-
-st_dly_shock_refit_from_fit <- function(dly_fit_obj,
-                                        shock_curves, shock_factors, shock_magnitude,
-                                        shock_type = c("additive", "multiplicative"),
-                                        shock_window = NULL,
-                                        shock_window_position = c("first", "last"),
-                                        lambdas = NULL) {
-  shock_type <- match.arg(shock_type)
-  shock_window_position <- match.arg(shock_window_position)
-
-  st_dly_shock_from_fit(
-    dly_fit_obj = dly_fit_obj,
-    shock_curves = shock_curves,
-    shock_factors = shock_factors,
-    shock_magnitude = shock_magnitude,
-    shock_type = shock_type,
-    shock_window = shock_window,
-    shock_window_position = shock_window_position,
-    refit_dly = TRUE,
-    lambdas = lambdas
-  )
-}
-
 st_dly_project_global_factor <- function(factor_draw, global_factor_obj) {
   factor_draw <- as.matrix(factor_draw)
   pca_fit <- global_factor_obj$pca
@@ -440,111 +404,167 @@ st_dly_predict_country_factor <- function(factor_model, global_factor, curves) {
   fitted
 }
 
-st_dly_shock_residual_states <- function(raw_level_factor, raw_slope_factor,
-                                         fitted_level_factor, fitted_slope_factor,
-                                         curves) {
-  setNames(lapply(curves, function(curve_name) {
-    out <- cbind(
-      L = raw_level_factor[, curve_name] - fitted_level_factor[, curve_name],
-      S = raw_slope_factor[, curve_name] - fitted_slope_factor[, curve_name]
-    )
-    rownames(out) <- rownames(fitted_level_factor)
-    out
-  }), curves)
-}
-
-st_dly_shock_global_path <- function(dly_fit_obj, shocked_global_level, shocked_global_slope,
-                                     shock_rows) {
-  global_path <- as.matrix(dly_fit_obj$dynamics$global$propagated)
-  override_state <- cbind(L = shocked_global_level, S = shocked_global_slope)
-  rownames(override_state) <- rownames(global_path)
-
-  if (1 %in% shock_rows) {
-    global_path[1, ] <- override_state[1, ]
+st_average_level_shock_profile <- function(curve_factor, shock_fraction_profile,
+                                           shock_factor = "L", curves = names(curve_factor)) {
+  if (!is.list(curve_factor) || length(curve_factor) == 0 || is.null(names(curve_factor))) {
+    stop("`curve_factor` must be a non-empty named list.")
   }
 
-  if (nrow(global_path) >= 2) {
-    for (t in 2:nrow(global_path)) {
-      if (t %in% shock_rows) {
-        global_path[t, ] <- override_state[t, ]
-      } else {
-        global_path[t, ] <- dly_transition_var1(
-          prev_state = global_path[t - 1, ],
-          intercept = dly_fit_obj$dynamics$global$intercept,
-          phi = dly_fit_obj$dynamics$global$phi
-        )
-      }
-    }
+  if (!is.character(shock_factor) || length(shock_factor) != 1 || is.na(shock_factor)) {
+    stop("`shock_factor` must be a single factor name.")
   }
 
-  global_path
+  curve_factor <- curve_factor[curves]
+  factor_panel <- do.call(cbind, lapply(curve_factor, function(factor_mat) {
+    factor_mat <- as.matrix(factor_mat)
+    if (!shock_factor %in% colnames(factor_mat)) {
+      stop("All factor matrices must contain `shock_factor`.")
+    }
+    factor_mat[, shock_factor]
+  }))
+
+  shock_fraction_profile <- as.numeric(shock_fraction_profile)
+  if (nrow(factor_panel) != length(shock_fraction_profile)) {
+    stop("Shock fraction profile length must match the number of factor rows.")
+  }
+
+  as.numeric(rowMeans(factor_panel) * shock_fraction_profile)
 }
 
-st_dly_shock_residual_path <- function(dly_fit_obj, global_path, shock_residual_states,
-                                       shock_rows) {
-  curves <- dly_fit_obj$curves
-
-  setNames(lapply(curves, function(curve_name) {
-    residual_model <- dly_fit_obj$dynamics$residual[[curve_name]]
-    residual_path <- as.matrix(residual_model$propagated)
-    override_state <- as.matrix(shock_residual_states[[curve_name]])
-
-    if (1 %in% shock_rows) {
-      residual_path[1, ] <- override_state[1, ]
-    }
-
-    if (nrow(residual_path) >= 2) {
-      for (t in 2:nrow(residual_path)) {
-        if (t %in% shock_rows) {
-          residual_path[t, ] <- override_state[t, ]
-        } else {
-          residual_path[t, ] <- dly_transition_country_residual(
-            prev_residual = residual_path[t - 1, ],
-            prev_global = global_path[t - 1, ],
-            intercept = residual_model$intercept,
-            phi = residual_model$phi,
-            kappa = residual_model$kappa
-          )
-        }
-      }
-    }
-
-    residual_path
-  }), curves)
-}
-
-st_dly_shock_from_fit <- function(dly_fit_obj,
-                                  shock_curves, shock_factors, shock_magnitude,
-                                  shock_type = c("additive", "multiplicative"),
-                                  shock_window = NULL,
-                                  shock_window_position = c("first", "last"),
-                                  refit_dly = FALSE,
-                                  lambdas = NULL) {
+st_dly_global_shock_from_fit_profile <- function(dly_fit_obj, shock_factors,
+                                                 shock_profile,
+                                                 shock_type = c("additive", "multiplicative")) {
   shock_type <- match.arg(shock_type)
-  shock_window_position <- match.arg(shock_window_position)
-
-  if (isTRUE(refit_dly)) {
-    return(st_dly_shock_refit_core(
-      dly_fit_obj = dly_fit_obj,
-      shock_curves = shock_curves,
-      shock_factors = shock_factors,
-      shock_magnitude = shock_magnitude,
-      shock_type = shock_type,
-      shock_window = shock_window,
-      shock_window_position = shock_window_position,
-      lambdas = lambdas
-    ))
+  if (!identical(shock_type, "additive")) {
+    stop("DLY global shocks currently support additive shocks only.")
+  }
+  if (!all(shock_factors %in% c("L", "S"))) {
+    stop("DLY global shocks support `L` and/or `S` shock factors.")
   }
 
-  shock_fit <- st_apply_factor_shock(
+  shock_magnitudes <- if (is.data.frame(shock_profile)) {
+    shock_profile$shock_magnitude
+  } else {
+    shock_profile
+  }
+  shock_magnitudes <- as.numeric(shock_magnitudes)
+
+  baseline_global_level <- as.numeric(dly_fit_obj$global_factors$level$factor)
+  baseline_global_slope <- as.numeric(dly_fit_obj$global_factors$slope$factor)
+  if (length(shock_magnitudes) != length(baseline_global_level)) {
+    stop("Shock profile length must match the DLY global factor length.")
+  }
+
+  shocked_global_level <- baseline_global_level
+  shocked_global_slope <- baseline_global_slope
+
+  if ("L" %in% shock_factors) {
+    loading_mean <- mean(as.numeric(dly_fit_obj$factor_models$level$loading[dly_fit_obj$curves]))
+    if (!is.finite(loading_mean) || abs(loading_mean) <= sqrt(.Machine$double.eps)) {
+      stop("Average DLY level loading is too close to zero for global shock scaling.")
+    }
+    shocked_global_level <- baseline_global_level + shock_magnitudes / loading_mean
+  }
+
+  if ("S" %in% shock_factors) {
+    loading_mean <- mean(as.numeric(dly_fit_obj$factor_models$slope$loading[dly_fit_obj$curves]))
+    if (!is.finite(loading_mean) || abs(loading_mean) <= sqrt(.Machine$double.eps)) {
+      stop("Average DLY slope loading is too close to zero for global shock scaling.")
+    }
+    shocked_global_slope <- baseline_global_slope + shock_magnitudes / loading_mean
+  }
+
+  shocked_level_fitted <- st_dly_predict_country_factor(
+    factor_model = dly_fit_obj$factor_models$level,
+    global_factor = shocked_global_level,
+    curves = dly_fit_obj$curves
+  )
+  shocked_slope_fitted <- st_dly_predict_country_factor(
+    factor_model = dly_fit_obj$factor_models$slope,
+    global_factor = shocked_global_slope,
+    curves = dly_fit_obj$curves
+  )
+
+  baseline_level_residual <- as.matrix(
+    dly_fit_obj$factor_models$level$residual[, dly_fit_obj$curves, drop = FALSE]
+  )
+  baseline_slope_residual <- as.matrix(
+    dly_fit_obj$factor_models$slope$residual[, dly_fit_obj$curves, drop = FALSE]
+  )
+
+  global_plus_idio_level_factor <- shocked_level_fitted + baseline_level_residual
+  global_plus_idio_slope_factor <- shocked_slope_fitted + baseline_slope_residual
+
+  raw_betas <- dly_fit_obj$country_betas$raw
+  global_betas <- dly_bind_betas(shocked_level_fitted, shocked_slope_fitted, curves = dly_fit_obj$curves)
+  idio_betas <- dly_bind_betas(baseline_level_residual, baseline_slope_residual, curves = dly_fit_obj$curves)
+  global_plus_idio_betas <- dly_bind_betas(
+    global_plus_idio_level_factor,
+    global_plus_idio_slope_factor,
+    curves = dly_fit_obj$curves
+  )
+
+  raw_yields <- dly_fit_obj$yields$raw
+  global_yields <- dly_curve_yields(
+    dly_fit_obj$single_curve,
+    shocked_level_fitted,
+    shocked_slope_fitted,
+    curves = dly_fit_obj$curves
+  )
+  idiosyncratic_yields <- dly_fit_obj$yields$idiosyncratic
+  global_plus_idiosyncratic_yields <- dly_curve_yields(
+    dly_fit_obj$single_curve,
+    global_plus_idio_level_factor,
+    global_plus_idio_slope_factor,
+    curves = dly_fit_obj$curves
+  )
+
+  shocked_fit <- dly_fit_obj
+  shocked_fit$global_factors$level$factor <- shocked_global_level
+  shocked_fit$global_factors$slope$factor <- shocked_global_slope
+  shocked_fit$factor_models$level$fitted <- shocked_level_fitted
+  shocked_fit$factor_models$slope$fitted <- shocked_slope_fitted
+  shocked_fit$factor_models$level$residual <- baseline_level_residual
+  shocked_fit$factor_models$slope$residual <- baseline_slope_residual
+  shocked_fit$country_betas$raw <- raw_betas
+  shocked_fit$country_betas$global <- global_betas
+  shocked_fit$country_betas$idiosyncratic <- idio_betas
+  shocked_fit$country_betas$global_plus_idiosyncratic <- global_plus_idio_betas
+  shocked_fit$yields$raw <- raw_yields
+  shocked_fit$yields$global <- global_yields
+  shocked_fit$yields$idiosyncratic <- idiosyncratic_yields
+  shocked_fit$yields$global_plus_idiosyncratic <- global_plus_idiosyncratic_yields
+  shocked_fit$residuals$global <- dly_curve_residuals(raw_yields, global_yields, dly_fit_obj$curves)
+  shocked_fit$residuals$global_plus_idiosyncratic <- dly_curve_residuals(
+    raw_yields,
+    global_plus_idiosyncratic_yields,
+    dly_fit_obj$curves
+  )
+
+  list(
+    fit = shocked_fit,
+    shock_profile = shock_profile,
+    baseline_fit = dly_fit_obj
+  )
+}
+
+st_dly_shock_from_fit_profile <- function(dly_fit_obj, shock_curves, shock_factors,
+                                          shock_profile,
+                                          shock_type = c("additive", "multiplicative")) {
+  shock_type <- match.arg(shock_type)
+  shock_magnitudes <- if (is.data.frame(shock_profile)) {
+    shock_profile$shock_magnitude
+  } else {
+    shock_profile
+  }
+
+  shock_fit <- st_apply_factor_shock_profile(
     curves = dly_fit_obj$curves,
     curve_dns_factor = dly_pull_beta(dly_fit_obj$single_curve, curves = dly_fit_obj$curves),
     shock_curves = shock_curves,
     shock_factors = shock_factors,
-    shock_magnitude = shock_magnitude,
-    shock_type = shock_type,
-    shock_window = shock_window,
-    shock_window_position = shock_window_position
+    shock_magnitudes = shock_magnitudes,
+    shock_type = shock_type
   )
 
   shocked_single_curve <- st_build_shocked_dly_single_curve(
@@ -583,53 +603,37 @@ st_dly_shock_from_fit <- function(dly_fit_obj,
     dly_fit_obj$factor_models$slope$residual[, dly_fit_obj$curves, drop = FALSE]
   )
 
-  shock_rows <- st_resolve_shock_rows(
-    row_count = nrow(raw_level_factor),
-    shock_window = shock_window,
-    shock_window_position = shock_window_position
-  )
+  shocked_level_residual <- baseline_level_residual
+  shocked_slope_residual <- baseline_slope_residual
+  directly_shocked_curves <- intersect(shock_curves, dly_fit_obj$curves)
+  if (length(directly_shocked_curves) > 0) {
+    baseline_level_factor <- as.matrix(
+      dly_fit_obj$country_factors$level[, dly_fit_obj$curves, drop = FALSE]
+    )
+    baseline_slope_factor <- as.matrix(
+      dly_fit_obj$country_factors$slope[, dly_fit_obj$curves, drop = FALSE]
+    )
+    shocked_level_residual[, directly_shocked_curves] <-
+      baseline_level_residual[, directly_shocked_curves, drop = FALSE] +
+      raw_level_factor[, directly_shocked_curves, drop = FALSE] -
+      baseline_level_factor[, directly_shocked_curves, drop = FALSE]
+    shocked_slope_residual[, directly_shocked_curves] <-
+      baseline_slope_residual[, directly_shocked_curves, drop = FALSE] +
+      raw_slope_factor[, directly_shocked_curves, drop = FALSE] -
+      baseline_slope_factor[, directly_shocked_curves, drop = FALSE]
+  }
 
-  shock_residual_states <- st_dly_shock_residual_states(
-    raw_level_factor = raw_level_factor,
-    raw_slope_factor = raw_slope_factor,
-    fitted_level_factor = shocked_level_fitted,
-    fitted_slope_factor = shocked_slope_fitted,
-    curves = dly_fit_obj$curves
-  )
-  propagated_global_state <- st_dly_shock_global_path(
-    dly_fit_obj = dly_fit_obj,
-    shocked_global_level = shocked_global_level,
-    shocked_global_slope = shocked_global_slope,
-    shock_rows = shock_rows
-  )
-  propagated_residual_state <- st_dly_shock_residual_path(
-    dly_fit_obj = dly_fit_obj,
-    global_path = propagated_global_state,
-    shock_residual_states = shock_residual_states,
-    shock_rows = shock_rows
-  )
-  propagated_global_factor <- dly_country_global_factors(
-    level_global_factor = propagated_global_state[, "L"],
-    slope_global_factor = propagated_global_state[, "S"],
-    factor_models = dly_fit_obj$factor_models,
-    curves = dly_fit_obj$curves
-  )
-  propagated_residual_factor <- dly_unpack_country_state(
-    country_state_list = propagated_residual_state,
-    curves = dly_fit_obj$curves
-  )
-  propagated_level_factor <- propagated_global_factor$level + propagated_residual_factor$level
-  propagated_slope_factor <- propagated_global_factor$slope + propagated_residual_factor$slope
+  global_plus_idio_level_factor <- shocked_level_fitted + shocked_level_residual
+  global_plus_idio_slope_factor <- shocked_slope_fitted + shocked_slope_residual
 
   raw_betas <- dly_bind_betas(raw_level_factor, raw_slope_factor, curves = dly_fit_obj$curves)
   global_betas <- dly_bind_betas(shocked_level_fitted, shocked_slope_fitted, curves = dly_fit_obj$curves)
-  idio_betas <- dly_bind_betas(baseline_level_residual, baseline_slope_residual, curves = dly_fit_obj$curves)
-  propagated_betas <- dly_bind_betas(
-    propagated_level_factor,
-    propagated_slope_factor,
+  idio_betas <- dly_bind_betas(shocked_level_residual, shocked_slope_residual, curves = dly_fit_obj$curves)
+  global_plus_idio_betas <- dly_bind_betas(
+    global_plus_idio_level_factor,
+    global_plus_idio_slope_factor,
     curves = dly_fit_obj$curves
   )
-
   raw_yields <- dly_curve_yields(
     shocked_single_curve,
     raw_level_factor,
@@ -644,17 +648,16 @@ st_dly_shock_from_fit <- function(dly_fit_obj,
   )
   idiosyncratic_yields <- dly_curve_yields(
     shocked_single_curve,
-    baseline_level_residual,
-    baseline_slope_residual,
+    shocked_level_residual,
+    shocked_slope_residual,
     curves = dly_fit_obj$curves
   )
-  propagated_yields <- dly_curve_yields(
+  global_plus_idiosyncratic_yields <- dly_curve_yields(
     shocked_single_curve,
-    propagated_level_factor,
-    propagated_slope_factor,
+    global_plus_idio_level_factor,
+    global_plus_idio_slope_factor,
     curves = dly_fit_obj$curves
   )
-
   shocked_fit <- list(
     curves = dly_fit_obj$curves,
     mats = dly_fit_obj$mats,
@@ -686,14 +689,14 @@ st_dly_shock_from_fit <- function(dly_fit_obj,
         intercept = dly_fit_obj$factor_models$level$intercept,
         loading = dly_fit_obj$factor_models$level$loading,
         fitted = shocked_level_fitted,
-        residual = baseline_level_residual,
+        residual = shocked_level_residual,
         r_squared = dly_fit_obj$factor_models$level$r_squared
       ),
       slope = list(
         intercept = dly_fit_obj$factor_models$slope$intercept,
         loading = dly_fit_obj$factor_models$slope$loading,
         fitted = shocked_slope_fitted,
-        residual = baseline_slope_residual,
+        residual = shocked_slope_residual,
         r_squared = dly_fit_obj$factor_models$slope$r_squared
       )
     ),
@@ -701,49 +704,31 @@ st_dly_shock_from_fit <- function(dly_fit_obj,
       raw = raw_betas,
       global = global_betas,
       idiosyncratic = idio_betas,
-      dislocation_propagated = propagated_betas
+      global_plus_idiosyncratic = global_plus_idio_betas
     ),
     yields = list(
       raw = raw_yields,
       global = global_yields,
       idiosyncratic = idiosyncratic_yields,
-      dislocation_propagated = propagated_yields
+      global_plus_idiosyncratic = global_plus_idiosyncratic_yields
     ),
     residuals = list(
       raw = dly_curve_residuals(raw_yields, raw_yields, dly_fit_obj$curves),
       global = dly_curve_residuals(raw_yields, global_yields, dly_fit_obj$curves),
-      dislocation_propagated = dly_curve_residuals(
+      global_plus_idiosyncratic = dly_curve_residuals(
         raw_yields,
-        propagated_yields,
+        global_plus_idiosyncratic_yields,
         dly_fit_obj$curves
       )
-    ),
-    dynamics = list(
-      global = c(
-        dly_fit_obj$dynamics$global[names(dly_fit_obj$dynamics$global) %in% c("intercept", "phi", "fitted", "residual")],
-        list(
-          actual = as.matrix(dly_fit_obj$dynamics$global$actual),
-          propagated = propagated_global_state
-        )
-      ),
-      residual = setNames(lapply(dly_fit_obj$curves, function(curve_name) {
-        c(
-          dly_fit_obj$dynamics$residual[[curve_name]][names(dly_fit_obj$dynamics$residual[[curve_name]]) %in% c("intercept", "phi", "kappa", "fitted", "residual")],
-          list(
-            actual = as.matrix(dly_fit_obj$dynamics$residual[[curve_name]]$actual),
-            propagated = propagated_residual_state[[curve_name]]
-          )
-        )
-      }), dly_fit_obj$curves)
     )
   )
 
-  return(list(
+  list(
     fit = shocked_fit,
-    shock_matrix = shock_fit$shock_matrix,
+    shock_profile = shock_profile,
     shocked_factors = shock_fit$shocked_factors,
     baseline_fit = dly_fit_obj
-  ))
+  )
 }
 
 st_align_Xt_to_baseline <- function(Xt_new, Xt_reference) {
@@ -816,97 +801,6 @@ st_finalize_shocked_fit <- function(yields, time, phi_hat, Xt, BS0, curves, mats
     Xt = Xt,
     W = W
   ))
-}
-
-st_curve_shock_delta <- function(baseline_yields, shocked_yields, shock_curves) {
-  shock_curves <- intersect(as.character(shock_curves), names(shocked_yields))
-
-  setNames(lapply(shock_curves, function(curve_name) {
-    baseline_curve <- baseline_yields[[curve_name]] %>%
-      dplyr::mutate(time = as.Date(time)) %>%
-      dplyr::arrange(time)
-    shocked_curve <- shocked_yields[[curve_name]] %>%
-      dplyr::mutate(time = as.Date(time)) %>%
-      dplyr::arrange(time)
-
-    if (!identical(as.Date(baseline_curve$time), as.Date(shocked_curve$time))) {
-      stop("Baseline and shocked curve histories must align to compute anchored shock deltas.")
-    }
-
-    delta_curve <- data.frame(
-      time = baseline_curve$time,
-      shocked_curve[, -1, drop = FALSE] - baseline_curve[, -1, drop = FALSE],
-      check.names = FALSE
-    )
-    colnames(delta_curve) <- colnames(baseline_curve)
-    delta_curve
-  }), shock_curves)
-}
-
-st_anchor_curve_output <- function(curve_panel, baseline_curve_panel, shock_delta_yields,
-                                   shock_curves, curves, mats, anchor_rows = NULL) {
-  shock_curves <- intersect(as.character(shock_curves), as.character(curves))
-
-  if (length(shock_curves) == 0) {
-    return(curve_panel)
-  }
-
-  mat_str <- sapply(mats, numeric_to_matname)
-  anchored_panel <- curve_panel
-  panel_time <- as.Date(curve_panel$time)
-  panel_rows <- seq_len(nrow(curve_panel))
-
-  if (is.null(anchor_rows)) {
-    anchor_rows <- panel_rows
-  } else {
-    if (!is.numeric(anchor_rows) || anyNA(anchor_rows) ||
-        any(anchor_rows %% 1 != 0)) {
-      stop("`anchor_rows` must be NULL or an integer row index vector.")
-    }
-    anchor_rows <- as.integer(anchor_rows)
-    anchor_rows <- anchor_rows[anchor_rows >= 1 & anchor_rows <= nrow(curve_panel)]
-  }
-
-  if (length(anchor_rows) == 0) {
-    return(anchored_panel)
-  }
-
-  for (curve_name in shock_curves) {
-    shock_delta_curve <- shock_delta_yields[[curve_name]]
-    if (is.null(shock_delta_curve)) {
-      stop("Each anchored shock curve must be present in `shock_delta_yields`.")
-    }
-
-    baseline_curve <- baseline_curve_panel %>%
-      dplyr::mutate(time = as.Date(time)) %>%
-      dplyr::arrange(time)
-    shock_delta_curve <- shock_delta_curve %>%
-      dplyr::mutate(time = as.Date(time)) %>%
-      dplyr::arrange(time)
-
-    row_idx <- match(panel_time, baseline_curve$time)
-    if (anyNA(row_idx)) {
-      stop("Baseline curve panel must align with the finalized shocked output time index.")
-    }
-
-    delta_idx <- match(panel_time, shock_delta_curve$time)
-    if (anyNA(delta_idx)) {
-      stop("Shock deltas must align with the finalized shocked output time index.")
-    }
-
-    curve_cols <- paste0(curve_name, ".", mat_str)
-    anchored_panel[anchor_rows, curve_cols] <-
-      baseline_curve[row_idx[anchor_rows], curve_cols, drop = FALSE] +
-      shock_delta_curve[delta_idx[anchor_rows], colnames(shock_delta_curve)[-1], drop = FALSE]
-  }
-
-  anchored_panel
-}
-
-st_tenor_panel_from_curve_panel <- function(curve_panel, curves, mats) {
-  P <- bln_build_P(curves, mats)
-  tenor_panel <- PY_full(curve_panel[, -1, drop = FALSE], P)$py
-  data.frame(time = as.Date(curve_panel$time), tenor_panel, check.names = FALSE)
 }
 
 st_resolve_config <- function(value, fallback) {
@@ -1064,7 +958,6 @@ mc_fit_shock_from_baseline <- function(baseline_state,
                                        shock_window = NULL,
                                        shock_window_position = c("first", "last"),
                                        reuse_BS0 = TRUE, reuse_ECM = TRUE,
-                                       anchor_shock_curves = FALSE,
                                        ECM_estim = NULL, ECM_type = NULL, ECM_alpha = NULL,
                                        ECM_fallback = c("error", "baseline"),
                                        X_normalize = NULL, X_trunc = NULL,
@@ -1181,33 +1074,6 @@ mc_fit_shock_from_baseline <- function(baseline_state,
     W = shocked_state$W
   )
 
-  if (isTRUE(anchor_shock_curves)) {
-    anchor_rows <- st_resolve_shock_rows(
-      row_count = nrow(single_curve_state$yields[[1]]),
-      shock_window = shock_window,
-      shock_window_position = shock_window_position
-    )
-    shock_delta_yields <- st_curve_shock_delta(
-      baseline_yields = single_curve_state$yields,
-      shocked_yields = shocked_state$yields,
-      shock_curves = shock_curves
-    )
-    shocked_fit_state$curve <- st_anchor_curve_output(
-      curve_panel = shocked_fit_state$curve,
-      baseline_curve_panel = baseline_state$baseline_fit$curve,
-      shock_delta_yields = shock_delta_yields,
-      shock_curves = shock_curves,
-      curves = baseline_state$curves,
-      mats = baseline_state$mats,
-      anchor_rows = anchor_rows
-    )
-    shocked_fit_state$tenor <- st_tenor_panel_from_curve_panel(
-      curve_panel = shocked_fit_state$curve,
-      curves = baseline_state$curves,
-      mats = baseline_state$mats
-    )
-  }
-
   return(list(
     tenor = baseline_state$baseline_fit$tenor,
     curve = baseline_state$baseline_fit$curve,
@@ -1255,7 +1121,6 @@ mc_fit_shock_refit_from_baseline <- function(baseline_state,
     shock_window_position = shock_window_position,
     reuse_BS0 = FALSE,
     reuse_ECM = FALSE,
-    anchor_shock_curves = FALSE,
     ECM_estim = ECM_estim,
     ECM_type = ECM_type,
     ECM_alpha = ECM_alpha,
@@ -1290,7 +1155,6 @@ mc_fit_shock <- function(yields = NULL, lambdas = NULL, cutoffs = NULL, referenc
                          shock_window = NULL,
                          shock_window_position = c("first", "last"),
                          reuse_BS0 = TRUE, reuse_ECM = TRUE,
-                         anchor_shock_curves = FALSE,
                          ECM_estim = "ML", ECM_type = "eigen", ECM_alpha = 0.1,
                          ECM_fallback = c("error", "baseline"),
                          X_normalize = TRUE, X_trunc = FALSE,
@@ -1365,7 +1229,6 @@ mc_fit_shock <- function(yields = NULL, lambdas = NULL, cutoffs = NULL, referenc
     shock_window_position = shock_window_position,
     reuse_BS0 = reuse_BS0,
     reuse_ECM = reuse_ECM,
-    anchor_shock_curves = anchor_shock_curves,
     ECM_estim = ECM_estim,
     ECM_type = ECM_type,
     ECM_alpha = ECM_alpha,

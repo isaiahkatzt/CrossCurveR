@@ -36,9 +36,7 @@ curve_files <- list(
   jpn = "jpn-bs.csv",
   cad = "cad-bs.csv",
   ger = "ger-bs.csv",
-  fra = "fra-bs.csv",
-  itl = "itl-bs-ib.csv",
-  aus = "aus-bs-ib.csv"
+  fra = "fra-bs.csv"
 )
 
 yields <- lapply(curve_files, function(x) {
@@ -51,7 +49,7 @@ yields <- lapply(yields, function(x) {
 })
 
 
-curves <- c("usa", "gbr", "jpn", "cad", "ger", "fra", "itl", "aus")
+curves <- c("usa", "gbr", "jpn", "cad", "ger", "fra")
 mats <- c(1, 3, 6, 12, 24, 60, 84, 120, 240, 360) 
 mat_str <- paste0("X", unlist(lapply(mats, numeric_to_matname)))
 
@@ -235,10 +233,10 @@ plot_wt_correlations <- function(wt_list, time_index, width = 60,
 time_index <- seq(1:length(yields[[1]]$time))
 
 plot_rolling_corr_heatmap(
-  wt_df = wt_list$wt_X30Y,
+  wt_df = wt_list$wt_X10Y,
   time_index = time_index,
   width = 50,
-  title = "50-day rolling cross-curve correlations for X360M tenor"
+  title = "50-day rolling cross-curve correlations for X120M tenor"
 )
 ```
 

@@ -1,6 +1,6 @@
 ---
-title: "Tontine Stress Test: Multi-Year Ladders"
-date: "2026-04-27"
+title: "Tontine Stress Test: Multi-Year Baseline Reinvestment Pool"
+date: "2026-05-02"
 output: html_document
 ---
 
@@ -10,11 +10,14 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 
 ## Purpose
 
-This notebook extends the tontine bond-ladder application from annual 1Y ZCB
-rungs to overlapping 2Y and 5Y ZCB rungs. The longer maturities keep existing
-holdings exposed to rate moves after purchase, so the notebook separates
-hold-to-maturity purchase economics from mark-to-market shock losses on
-already-owned bonds.
+This notebook evaluates baseline closed-pool tontine reinvestment strategies
+using 5-year and 10-year zero-coupon bond holdings. The mortality and
+withdrawal event path is identical to the 1-year tontine notebook. Initial pool
+cash is staged into annual rungs until the ladder is seeded; maturity proceeds
+are fully reinvested when they arrive inside the modeled horizon.
+
+Shock scenarios revalue the fixed baseline holdings under global positive
+level-factor shocks.
 
 ```{r libraries}
 library(here)
@@ -28,6 +31,7 @@ library(tsDyn)
 library(Matrix)
 
 sys.source(here::here("applications", "tontine_helpers.R"), envir = .GlobalEnv)
+sys.source(here::here("applications", "tontine_setup.R"), envir = .GlobalEnv)
 tontine_source_project()
 ```
 
@@ -52,6 +56,7 @@ lookback_years <- 1
 lambdas <- seq(0.01, 0.15, by = 0.005)
 cutoffs <- c(4, 8)
 fit_seed <- 999
+event_seed <- 999
 
 mce_baseline_controls <- list(
   ECM_alpha = 0.2,
@@ -67,28 +72,37 @@ mce_baseline_controls <- list(
 mce_shock_controls <- list(
   reuse_ECM = TRUE,
   reuse_BS0 = TRUE,
-  ECM_fallback = "baseline",
-  anchor_shock_curves = FALSE
+  ECM_fallback = "baseline"
 )
 
+purchase_years <- 2011:2020
+reporting_years <- purchase_years
 N_members <- 1000
-target_total_ladder_par_per_member <- 100000
-total_target_par <- N_members * target_total_ladder_par_per_member
-population_seed <- fit_seed
+target_payout_per_member <- 100000
+initial_position_per_member <- target_payout_per_member
+initial_pool_cash <- N_members * initial_position_per_member
+withdrawal_fraction <- 0.05
+withdrawal_penalty_rate <- 0.005
+
 q_full <- c(
   0.013404, 0.014795, 0.016280, 0.017595, 0.019527,
   0.021506, 0.023614, 0.025473, 0.027789, 0.030319
 )
+stopifnot(length(q_full) >= length(purchase_years))
+q <- q_full[seq_along(purchase_years)]
 
-maturity_specs <- list(
-  `2Y` = list(bond_maturity_years = 2, purchase_years = 2011:2019),
-  `5Y` = list(bond_maturity_years = 5, purchase_years = 2011:2016)
+eta_params <- list(
+  eta0 = 0.05,
+  a = 1.25,
+  b = 0.05,
+  sigma = 0.05,
+  substeps = 12
 )
-mtm_valuation_years <- 2015:2020
-model_purchase_years <- sort(unique(c(
-  unlist(lapply(maturity_specs, `[[`, "purchase_years")),
-  mtm_valuation_years
-)))
+
+strategy_specs <- list(
+  `5Y` = list(bond_maturity_years = 5),
+  `10Y` = list(bond_maturity_years = 10)
+)
 
 baseline_model_names <- c("Observed", "DNS", "DLY", "MCE")
 shock_model_names <- c("DNS", "DLY", "MCE")
@@ -106,37 +120,54 @@ yields <- tontine_read_yields(
 valuation_windows <- tontine_build_valuation_windows(
   yields = yields,
   reference_curve = reference_curve,
-  purchase_years = model_purchase_years,
-  lookback_years = lookback_years
+  purchase_years = purchase_years,
+  lookback_years = lookback_years,
+  date_position = "first",
+  valuation_date_position = "first"
 )
 ```
 
-```{r ladder-schedules}
-build_multiyr_schedule <- function(spec, maturity_label) {
-  purchase_years <- spec$purchase_years
-  target_rung_par_per_member <- target_total_ladder_par_per_member / length(purchase_years)
-  q <- q_full[seq_along(purchase_years)]
-  population_simulation <- tontine_simulate_population(
-    N_members = N_members,
-    q = q,
-    seed = population_seed + spec$bond_maturity_years
+```{r tontine-event-path}
+member_pool <- tontine_create_member_pool(
+  N_members = N_members,
+  initial_position = initial_position_per_member
+)
+
+event_rung_schedule <- tontine_create_rung_schedule(
+  purchase_years = purchase_years,
+  bond_maturity_years = 1,
+  contribution_per_member = 0,
+  death_rates = q
+)
+
+eta_intensity_path <- tontine_simulate_cir_integrated_intensity(
+  n_rungs = length(purchase_years),
+  eta0 = eta_params$eta0,
+  a = eta_params$a,
+  b = eta_params$b,
+  sigma = eta_params$sigma,
+  substeps = eta_params$substeps,
+  seed = event_seed
+)
+
+event_schedule <- tontine_create_event_schedule(
+  purchase_years = purchase_years,
+  death_rates = q,
+  integrated_eta = eta_intensity_path$integrated_eta
+)
+
+event_path <- tontine_simulate_event_path(
+  member_pool = member_pool,
+  event_schedule = event_schedule,
+  seed = event_seed
+)
+
+event_path %>%
+  dplyr::select(
+    rung_id, purchase_year, death_rate, death_count, survivors_after_death,
+    integrated_eta, withdrawal_poisson_mean, raw_withdrawal_count,
+    withdrawal_count, withdrawal_count_capped
   )
-
-  tontine_build_bond_ladder_schedule(
-    yields = yields,
-    reference_curve = reference_curve,
-    purchase_years = purchase_years,
-    curves = curves,
-    total_target_par = total_target_par,
-    q = q,
-    population_simulation = population_simulation,
-    target_rung_par_per_member = target_rung_par_per_member,
-    bond_maturity_years = spec$bond_maturity_years
-  ) %>%
-    dplyr::mutate(ladder_maturity = maturity_label)
-}
-
-ladder_schedules <- purrr::imap(maturity_specs, build_multiyr_schedule)
 ```
 
 ```{r baseline-models}
@@ -157,45 +188,577 @@ baseline_curve_models <- tontine_fit_rolling_baseline_curve_models(
 )
 ```
 
-```{r baseline-valuations}
-tag_valuation <- function(valuation, maturity_label) {
-  valuation$country_holdings <- valuation$country_holdings %>%
-    dplyr::mutate(ladder_maturity = maturity_label)
-  valuation$cash_accounts <- valuation$cash_accounts %>%
-    dplyr::mutate(ladder_maturity = maturity_label)
-  valuation
+```{r multiyr-baseline-helpers}
+build_multiyr_empty_holdings <- function() {
+  data.frame(
+    strategy = character(),
+    model = character(),
+    scenario = character(),
+    scenario_type = character(),
+    purchase_year = integer(),
+    purchase_date = as.Date(character()),
+    maturity_year = integer(),
+    maturity_date = as.Date(character()),
+    bond_maturity_years = integer(),
+    country = character(),
+    zero_rate = numeric(),
+    purchase_cost = numeric(),
+    maturity_proceeds = numeric(),
+    bond_profit_loss = numeric(),
+    stringsAsFactors = FALSE
+  )
 }
 
-baseline_valuations <- purrr::imap(ladder_schedules, function(ladder_schedule, maturity_label) {
-  tontine_price_baseline_models(
-    baseline_curve_models = baseline_curve_models,
-    ladder_schedule = ladder_schedule,
-    mat_names = mat_names
-  ) %>%
-    tag_valuation(maturity_label)
-})
+build_multiyr_empty_mtm <- function() {
+  data.frame(
+    strategy = character(),
+    model = character(),
+    scenario = character(),
+    scenario_type = character(),
+    valuation_year = integer(),
+    valuation_date = as.Date(character()),
+    purchase_year = integer(),
+    purchase_date = as.Date(character()),
+    maturity_year = integer(),
+    maturity_date = as.Date(character()),
+    remaining_maturity_years = numeric(),
+    country = character(),
+    purchase_cost = numeric(),
+    maturity_proceeds = numeric(),
+    mtm_zero_rate = numeric(),
+    mtm_value = numeric(),
+    mtm_profit_loss = numeric(),
+    stringsAsFactors = FALSE
+  )
+}
+
+build_multiyr_plot_y_limits <- function(values, symmetric = FALSE) {
+  values <- values[is.finite(values)]
+  if (length(values) == 0) {
+    return(c(-1, 1))
+  }
+
+  if (isTRUE(symmetric)) {
+    max_abs <- max(abs(values), 0)
+    if (max_abs == 0) {
+      max_abs <- 1
+    }
+    max_abs <- max_abs * 1.05
+    return(c(-max_abs, max_abs))
+  }
+
+  value_range <- range(c(0, values))
+  if (diff(value_range) == 0) {
+    return(value_range + c(-1, 1))
+  }
+
+  value_range + c(-1, 1) * diff(value_range) * 0.05
+}
+
+multiyr_alive_position_total <- function(members) {
+  sum(members$current_position[members$alive])
+}
+
+multiyr_scale_alive_positions_to_nav <- function(members, target_nav) {
+  alive_idx <- which(members$alive)
+  if (length(alive_idx) == 0) {
+    return(members)
+  }
+
+  alive_position <- sum(members$current_position[alive_idx])
+  if (alive_position <= 0) {
+    members$current_position[alive_idx] <- target_nav / length(alive_idx)
+    return(members)
+  }
+
+  members$current_position[alive_idx] <-
+    members$current_position[alive_idx] * target_nav / alive_position
+  members
+}
+
+multiyr_pool_book_nav <- function(cash_initial_reserve, cash_reinvestment, holdings) {
+  cash_initial_reserve + cash_reinvestment + sum(holdings$purchase_cost)
+}
+
+multiyr_deduct_cash <- function(cash_initial_reserve, cash_reinvestment, amount) {
+  amount <- as.numeric(amount)
+  initial_draw <- min(cash_initial_reserve, amount)
+  cash_initial_reserve <- cash_initial_reserve - initial_draw
+  remaining <- amount - initial_draw
+  reinvestment_draw <- min(cash_reinvestment, remaining)
+  cash_reinvestment <- cash_reinvestment - reinvestment_draw
+  liquidity_shortfall <- remaining - reinvestment_draw
+
+  if (liquidity_shortfall > sqrt(.Machine$double.eps)) {
+    cash_initial_reserve <- cash_initial_reserve - liquidity_shortfall
+  }
+
+  list(
+    cash_initial_reserve = cash_initial_reserve,
+    cash_reinvestment = cash_reinvestment,
+    initial_draw = initial_draw,
+    reinvestment_draw = reinvestment_draw,
+    liquidity_shortfall = liquidity_shortfall
+  )
+}
+
+multiyr_build_purchase_holdings <- function(model_obj, strategy_label,
+                                            bond_maturity_years,
+                                            purchase_year, purchase_date,
+                                            investment_amount) {
+  if (investment_amount <= 0) {
+    return(build_multiyr_empty_holdings())
+  }
+
+  tenor_col <- tontine_bond_tenor_col(bond_maturity_years)
+  if (!tenor_col %in% mat_names) {
+    stop(sprintf("Missing required tenor `%s` for strategy `%s`.", tenor_col, strategy_label))
+  }
+
+  maturity_year <- purchase_year + bond_maturity_years
+  maturity_date <- tontine_resolve_maturity_date(
+    reference_panel = yields[[reference_curve]],
+    purchase_date = purchase_date,
+    maturity_year = maturity_year
+  )
+  country_purchase_cost <- investment_amount / length(curves)
+
+  purrr::map_dfr(curves, function(country_name) {
+    zero_rate <- tontine_extract_curve_rate(
+      curve_panel = model_obj$curve_panels[[country_name]],
+      target_date = purchase_date,
+      tenor_col = tenor_col
+    ) / 100
+    country_maturity_proceeds <- country_purchase_cost * exp(zero_rate * bond_maturity_years)
+
+    data.frame(
+      strategy = strategy_label,
+      model = model_obj$model,
+      scenario = paste("Baseline", model_obj$model),
+      scenario_type = "baseline",
+      purchase_year = purchase_year,
+      purchase_date = as.Date(purchase_date),
+      maturity_year = maturity_year,
+      maturity_date = as.Date(maturity_date),
+      bond_maturity_years = bond_maturity_years,
+      country = country_name,
+      zero_rate = zero_rate,
+      purchase_cost = country_purchase_cost,
+      maturity_proceeds = country_maturity_proceeds,
+      bond_profit_loss = country_maturity_proceeds - country_purchase_cost,
+      stringsAsFactors = FALSE
+    )
+  })
+}
+
+multiyr_mark_to_market_holdings <- function(holdings, model_obj, valuation_year,
+                                            valuation_date) {
+  outstanding_holdings <- holdings[
+    holdings$purchase_year <= valuation_year &
+      as.Date(holdings$maturity_date) > as.Date(valuation_date),
+    ,
+    drop = FALSE
+  ]
+  if (nrow(outstanding_holdings) == 0) {
+    return(build_multiyr_empty_mtm())
+  }
+
+  out <- outstanding_holdings
+  out$valuation_year <- valuation_year
+  out$valuation_date <- as.Date(valuation_date)
+  out$remaining_maturity_years <-
+    as.numeric(as.Date(out$maturity_date) - as.Date(valuation_date)) / 365.25
+  out$remaining_maturity_years <- pmax(out$remaining_maturity_years, 1 / 365.25)
+  out$mtm_zero_rate <- vapply(seq_len(nrow(out)), function(i) {
+    interpolate_curve_rate(
+      curve_panel = model_obj$curve_panels[[out$country[[i]]]],
+      target_date = valuation_date,
+      target_months = 12 * out$remaining_maturity_years[[i]],
+      mats = mats,
+      mat_names = mat_names,
+      rate_scale = "decimal"
+    )
+  }, numeric(1))
+  out$mtm_value <-
+    out$maturity_proceeds * exp(-out$mtm_zero_rate * out$remaining_maturity_years)
+  out$mtm_profit_loss <- out$mtm_value - out$purchase_cost
+
+  out[, c(
+    "strategy", "model", "scenario", "scenario_type",
+    "valuation_year", "valuation_date", "purchase_year", "purchase_date",
+    "maturity_year", "maturity_date", "remaining_maturity_years",
+    "country", "purchase_cost", "maturity_proceeds",
+    "mtm_zero_rate", "mtm_value", "mtm_profit_loss"
+  )]
+}
+
+simulate_multiyr_baseline_strategy <- function(model_obj, strategy_label,
+                                               bond_maturity_years) {
+  members <- member_pool
+  cash_initial_reserve <- initial_pool_cash
+  cash_reinvestment <- 0
+  holdings <- build_multiyr_empty_holdings()
+  all_holdings <- build_multiyr_empty_holdings()
+  realized_country_rows <- list()
+  mtm_country_rows <- list()
+  history_rows <- vector("list", length(purchase_years))
+  state <- tontine_initialize_state(
+    member_pool = members,
+    withdrawal_settings = tontine_withdrawal_settings(
+      withdrawal_fraction = withdrawal_fraction,
+      withdrawal_penalty_rate = withdrawal_penalty_rate
+    )
+  )
+
+  for (i in seq_along(purchase_years)) {
+    purchase_year <- purchase_years[[i]]
+    purchase_date <- valuation_windows$purchase_date[[i]]
+    valuation_date <- valuation_windows$valuation_date[[i]]
+    event_row <- event_path[event_path$rung_id == i, , drop = FALSE]
+    if (nrow(event_row) != 1) {
+      stop("`event_path` must contain exactly one row per purchase year.")
+    }
+
+    active_start_count <- sum(members$alive)
+    book_nav_start <- multiyr_pool_book_nav(
+      cash_initial_reserve = cash_initial_reserve,
+      cash_reinvestment = cash_reinvestment,
+      holdings = holdings
+    )
+    members <- multiyr_scale_alive_positions_to_nav(members, book_nav_start)
+    active_position_start <- multiyr_alive_position_total(members)
+
+    maturing_holdings <- holdings[
+      as.Date(holdings$maturity_date) <= as.Date(purchase_date),
+      ,
+      drop = FALSE
+    ]
+    maturity_proceeds <- sum(maturing_holdings$maturity_proceeds)
+    maturity_book_cost <- sum(maturing_holdings$purchase_cost)
+    realized_bond_profit_loss <- sum(maturing_holdings$bond_profit_loss)
+    if (nrow(maturing_holdings) > 0) {
+      realized_country_rows[[length(realized_country_rows) + 1]] <- maturing_holdings %>%
+        dplyr::mutate(realization_year = purchase_year)
+      holdings <- holdings[
+        !(as.Date(holdings$maturity_date) <= as.Date(purchase_date)),
+        ,
+        drop = FALSE
+      ]
+      cash_reinvestment <- cash_reinvestment + maturity_proceeds
+      members <- multiyr_scale_alive_positions_to_nav(
+        members,
+        multiyr_pool_book_nav(cash_initial_reserve, cash_reinvestment, holdings)
+      )
+    }
+
+    state$members <- members
+    death_result <- tontine_apply_deaths(
+      state = state,
+      rung_id = i,
+      death_member_ids = event_row$death_member_ids[[1]]
+    )
+    members <- death_result$state$members
+    members <- multiyr_scale_alive_positions_to_nav(
+      members,
+      multiyr_pool_book_nav(cash_initial_reserve, cash_reinvestment, holdings)
+    )
+
+    state$members <- members
+    withdrawal_result <- tontine_apply_withdrawals(
+      state = state,
+      rung_id = i,
+      withdrawal_member_ids = event_row$withdrawal_member_ids[[1]]
+    )
+    members <- withdrawal_result$state$members
+    cash_after_withdrawal <- multiyr_deduct_cash(
+      cash_initial_reserve = cash_initial_reserve,
+      cash_reinvestment = cash_reinvestment,
+      amount = withdrawal_result$total_withdrawal
+    )
+    cash_initial_reserve <- cash_after_withdrawal$cash_initial_reserve
+    cash_reinvestment <- cash_after_withdrawal$cash_reinvestment
+    members <- multiyr_scale_alive_positions_to_nav(
+      members,
+      multiyr_pool_book_nav(cash_initial_reserve, cash_reinvestment, holdings)
+    )
+
+    remaining_seed_years <- max(bond_maturity_years - i + 1L, 0L)
+    scheduled_initial_investment <- if (remaining_seed_years > 0) {
+      max(cash_initial_reserve, 0) / remaining_seed_years
+    } else {
+      0
+    }
+    reinvestment_investment <- max(cash_reinvestment, 0)
+    total_investment <- scheduled_initial_investment + reinvestment_investment
+
+    new_holdings <- multiyr_build_purchase_holdings(
+      model_obj = model_obj,
+      strategy_label = strategy_label,
+      bond_maturity_years = bond_maturity_years,
+      purchase_year = purchase_year,
+      purchase_date = purchase_date,
+      investment_amount = total_investment
+    )
+    if (nrow(new_holdings) > 0) {
+      holdings <- rbind(holdings, new_holdings)
+      all_holdings <- rbind(all_holdings, new_holdings)
+    }
+    cash_initial_reserve <- cash_initial_reserve - scheduled_initial_investment
+    cash_reinvestment <- cash_reinvestment - reinvestment_investment
+
+    book_nav_end <- multiyr_pool_book_nav(
+      cash_initial_reserve = cash_initial_reserve,
+      cash_reinvestment = cash_reinvestment,
+      holdings = holdings
+    )
+    mtm_holdings <- multiyr_mark_to_market_holdings(
+      holdings = holdings,
+      model_obj = model_obj,
+      valuation_year = purchase_year,
+      valuation_date = valuation_date
+    )
+    outstanding_bond_mtm_value <- sum(mtm_holdings$mtm_value)
+    outstanding_bond_mtm_profit_loss <- sum(mtm_holdings$mtm_profit_loss)
+    mtm_nav_end <- cash_initial_reserve + cash_reinvestment + outstanding_bond_mtm_value
+    if (nrow(mtm_holdings) > 0) {
+      mtm_country_rows[[length(mtm_country_rows) + 1]] <- mtm_holdings
+    }
+
+    members <- multiyr_scale_alive_positions_to_nav(members, book_nav_end)
+    active_end_count <- sum(members$alive)
+    active_position_end <- multiyr_alive_position_total(members)
+
+    history_rows[[i]] <- data.frame(
+      strategy = strategy_label,
+      model = model_obj$model,
+      scenario = paste("Baseline", model_obj$model),
+      scenario_type = "baseline",
+      rung_id = i,
+      purchase_year = purchase_year,
+      purchase_date = as.Date(purchase_date),
+      valuation_date = as.Date(valuation_date),
+      bond_maturity_years = bond_maturity_years,
+      active_start_count = active_start_count,
+      active_position_start = active_position_start,
+      death_count = length(event_row$death_member_ids[[1]]),
+      death_forfeited_position = death_result$forfeited_position,
+      active_after_deaths_count = sum(members$alive),
+      integrated_eta = event_row$integrated_eta[[1]],
+      withdrawal_poisson_mean = event_row$withdrawal_poisson_mean[[1]],
+      raw_withdrawal_count = event_row$raw_withdrawal_count[[1]],
+      withdrawal_count = length(event_row$withdrawal_member_ids[[1]]),
+      withdrawal_count_capped = event_row$withdrawal_count_capped[[1]],
+      total_withdrawal = withdrawal_result$total_withdrawal,
+      withdrawal_penalty = withdrawal_result$total_penalty,
+      withdrawal_liquidity_shortfall = cash_after_withdrawal$liquidity_shortfall,
+      maturity_book_cost = maturity_book_cost,
+      maturity_proceeds = maturity_proceeds,
+      realized_bond_profit_loss = realized_bond_profit_loss,
+      scheduled_initial_investment = scheduled_initial_investment,
+      reinvestment_investment = reinvestment_investment,
+      total_purchase_cost = total_investment,
+      cash_initial_reserve_end = cash_initial_reserve,
+      cash_reinvestment_end = cash_reinvestment,
+      cash_total_end = cash_initial_reserve + cash_reinvestment,
+      outstanding_bond_book_value = sum(holdings$purchase_cost),
+      outstanding_bond_mtm_value = outstanding_bond_mtm_value,
+      outstanding_bond_mtm_profit_loss = outstanding_bond_mtm_profit_loss,
+      book_nav_end = book_nav_end,
+      mtm_nav_end = mtm_nav_end,
+      active_end_count = active_end_count,
+      active_position_end = active_position_end,
+      average_book_position_end =
+        ifelse(active_end_count > 0, active_position_end / active_end_count, NA_real_),
+      average_mtm_position_end =
+        ifelse(active_end_count > 0, mtm_nav_end / active_end_count, NA_real_),
+      stringsAsFactors = FALSE
+    )
+
+    state$members <- members
+  }
+
+  list(
+    rung_history = dplyr::bind_rows(history_rows),
+    holdings_outstanding = holdings,
+    holdings_all = all_holdings,
+    realized_country_pl = dplyr::bind_rows(realized_country_rows),
+    country_mtm = dplyr::bind_rows(mtm_country_rows)
+  )
+}
 ```
 
-## Shock Example
+```{r baseline-valuations}
+baseline_strategy_replays <- purrr::imap(strategy_specs, function(strategy_spec, strategy_label) {
+  purrr::imap(baseline_curve_models, function(model_obj, model_key) {
+    simulate_multiyr_baseline_strategy(
+      model_obj = model_obj,
+      strategy_label = strategy_label,
+      bond_maturity_years = strategy_spec$bond_maturity_years
+    )
+  })
+})
 
-The rate-pain diagnostic uses a USA `+100 BPS` level-factor shock beginning at
-the 2015 purchase date and linearly decaying to zero at the 2020 purchase date.
-Only mark-to-market losses on already-owned 2Y and 5Y holdings are reported
-here.
+baseline_rung_summary <- dplyr::bind_rows(unlist(
+  purrr::map(baseline_strategy_replays, function(strategy_replays) {
+    purrr::map(strategy_replays, "rung_history")
+  }),
+  recursive = FALSE
+))
+
+baseline_holdings_outstanding <- dplyr::bind_rows(unlist(
+  purrr::map(baseline_strategy_replays, function(strategy_replays) {
+    purrr::map(strategy_replays, "holdings_outstanding")
+  }),
+  recursive = FALSE
+))
+
+baseline_holdings_all <- dplyr::bind_rows(unlist(
+  purrr::map(baseline_strategy_replays, function(strategy_replays) {
+    purrr::map(strategy_replays, "holdings_all")
+  }),
+  recursive = FALSE
+))
+
+baseline_realized_country_pl <- dplyr::bind_rows(unlist(
+  purrr::map(baseline_strategy_replays, function(strategy_replays) {
+    purrr::map(strategy_replays, "realized_country_pl")
+  }),
+  recursive = FALSE
+))
+
+baseline_country_mtm <- dplyr::bind_rows(unlist(
+  purrr::map(baseline_strategy_replays, function(strategy_replays) {
+    purrr::map(strategy_replays, "country_mtm")
+  }),
+  recursive = FALSE
+))
+```
+
+```{r baseline-summaries}
+baseline_model_summary <- baseline_rung_summary %>%
+  dplyr::group_by(strategy, model) %>%
+  dplyr::summarise(
+    final_active_members = dplyr::last(active_end_count),
+    final_book_nav = dplyr::last(book_nav_end),
+    final_mtm_nav = dplyr::last(mtm_nav_end),
+    final_average_book_position = dplyr::last(average_book_position_end),
+    final_average_mtm_position = dplyr::last(average_mtm_position_end),
+    final_cash_total = dplyr::last(cash_total_end),
+    final_cash_initial_reserve = dplyr::last(cash_initial_reserve_end),
+    final_cash_reinvestment = dplyr::last(cash_reinvestment_end),
+    final_outstanding_bond_book_value = dplyr::last(outstanding_bond_book_value),
+    final_outstanding_bond_mtm_value = dplyr::last(outstanding_bond_mtm_value),
+    total_withdrawals = sum(total_withdrawal),
+    total_withdrawal_penalties = sum(withdrawal_penalty),
+    total_withdrawal_liquidity_shortfall = sum(withdrawal_liquidity_shortfall),
+    total_maturity_proceeds = sum(maturity_proceeds),
+    total_realized_bond_profit_loss = sum(realized_bond_profit_loss),
+    .groups = "drop"
+  ) %>%
+  dplyr::arrange(strategy, model)
+
+baseline_cash_summary <- baseline_rung_summary %>%
+  dplyr::select(
+    strategy, model, purchase_year, cash_initial_reserve_end,
+    cash_reinvestment_end, cash_total_end, withdrawal_liquidity_shortfall,
+    scheduled_initial_investment, reinvestment_investment
+  ) %>%
+  dplyr::arrange(strategy, purchase_year, model)
+
+baseline_realized_country_pl_summary <- baseline_realized_country_pl %>%
+  dplyr::group_by(strategy, model, country) %>%
+  dplyr::summarise(
+    realized_purchase_cost = sum(purchase_cost),
+    realized_maturity_proceeds = sum(maturity_proceeds),
+    realized_bond_profit_loss = sum(bond_profit_loss),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(country = toupper(country)) %>%
+  dplyr::arrange(strategy, country, model)
+
+baseline_country_mtm_summary <- baseline_country_mtm %>%
+  dplyr::group_by(strategy, model, valuation_year, valuation_date, country) %>%
+  dplyr::summarise(
+    outstanding_purchase_cost = sum(purchase_cost),
+    outstanding_maturity_proceeds = sum(maturity_proceeds),
+    mtm_value = sum(mtm_value),
+    mtm_profit_loss = sum(mtm_profit_loss),
+    active_holding_count = dplyr::n_distinct(purchase_year),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(country = toupper(country)) %>%
+  dplyr::arrange(strategy, valuation_year, country, model)
+
+baseline_total_mtm_summary <- baseline_country_mtm_summary %>%
+  dplyr::group_by(strategy, model, valuation_year, valuation_date) %>%
+  dplyr::summarise(
+    outstanding_purchase_cost = sum(outstanding_purchase_cost),
+    outstanding_maturity_proceeds = sum(outstanding_maturity_proceeds),
+    mtm_value = sum(mtm_value),
+    mtm_profit_loss = sum(mtm_profit_loss),
+    active_holding_count = sum(active_holding_count),
+    .groups = "drop"
+  ) %>%
+  dplyr::left_join(
+    baseline_rung_summary %>%
+      dplyr::select(
+        strategy, model,
+        valuation_year = purchase_year,
+        cash_initial_reserve_end,
+        cash_reinvestment_end,
+        cash_total_end,
+        mtm_nav_end,
+        average_mtm_position_end
+      ),
+    by = c("strategy", "model", "valuation_year")
+  ) %>%
+  dplyr::arrange(strategy, valuation_year, model)
+
+baseline_rung_summary
+baseline_model_summary
+baseline_cash_summary
+baseline_realized_country_pl_summary
+baseline_country_mtm_summary
+baseline_total_mtm_summary
+```
+
+## MTM Shock Examples
+
+These shocks revalue baseline holdings only. The mortality path, withdrawal
+path, purchases, maturity proceeds, and reinvestment schedule remain fixed.
 
 ```{r shock-specs}
+shock_ramp_start_fraction <- 0.30 / length(2015:2020)
+
 shock_examples <- list(
-  usa_l_100bps_decay_2015_2020 = list(
-    label = "USA L +100 BPS linear decay 2015-2020",
+  global_l_pos30pct_decay_2015_2020 = list(
+    label = "Global L +30% average level linear decay 2015-2020",
     shock_profile = "linear_decay",
     shock_start_year = 2015,
-    shock_start_anchor = "purchase_date",
+    shock_start_anchor = "valuation_date",
     shock_end_year = 2020,
-    shock_end_anchor = "purchase_date",
-    shock_curves = "usa",
+    shock_end_anchor = "valuation_date",
+    shock_effect_timing = "full_window",
+    shock_curves = curves,
     shock_factors = "L",
-    shock_start_magnitude = 1.0,
+    shock_start_magnitude = 0.30,
     shock_end_magnitude = 0.0,
+    shock_basis = "average_level_fraction",
+    shock_type = "additive"
+  ),
+  global_l_pos30pct_increase_2015_2020 = list(
+    label = "Global L increasing positive average level shock 2015-2020",
+    shock_profile = "linear_increase",
+    shock_start_year = 2015,
+    shock_start_anchor = "valuation_date",
+    shock_end_year = 2020,
+    shock_end_anchor = "valuation_date",
+    shock_effect_timing = "full_window",
+    shock_curves = curves,
+    shock_factors = "L",
+    shock_start_magnitude = shock_ramp_start_fraction,
+    shock_end_magnitude = 0.30,
+    shock_basis = "average_level_fraction",
     shock_type = "additive"
   )
 )
@@ -221,140 +784,67 @@ shock_curve_models <- purrr::imap(shock_examples, function(shock_spec, shock_key
 })
 ```
 
-```{r baseline-summaries}
-tontine_summarize_rungs <- function(valuation) {
-  valuation$country_holdings %>%
-    dplyr::group_by(
-      ladder_maturity, model, scenario, scenario_type, shock_label,
-      rung_id, purchase_year, bond_maturity_years
-    ) %>%
-    dplyr::summarise(
-      average_zero_rate = mean(zero_rate),
-      total_purchase_cost = sum(purchase_cost),
-      total_maturity_proceeds = sum(maturity_proceeds),
-      .groups = "drop"
-    ) %>%
-    dplyr::left_join(
-      valuation$cash_accounts %>%
-        dplyr::select(
-          ladder_maturity, model, scenario, rung_id,
-          cash_end, rung_profit_loss, cumulative_profit_loss
-        ),
-      by = c("ladder_maturity", "model", "scenario", "rung_id")
-    )
-}
+```{r shock-mtm-valuations}
+multiyr_mark_baseline_holdings_to_curve_models <- function(holdings, curve_models,
+                                                           shock_key, shock_label) {
+  purrr::imap_dfr(curve_models, function(model_obj, model_key) {
+    model_holdings <- holdings %>%
+      dplyr::filter(.data$model == model_obj$model)
 
-baseline_rung_summary <- purrr::imap_dfr(baseline_valuations, function(valuation, maturity_label) {
-  tontine_summarize_rungs(valuation)
-})
-
-baseline_rung_summary
-```
-
-## Mark-to-Market Shock Loss
-
-The mark-to-market section values only holdings that were purchased before each
-annual shock valuation date and have not yet matured. This is the channel where
-a positive rate shock lowers the value of already-owned longer-duration bonds.
-
-```{r mtm-shock}
-mtm_valuation_schedule <- valuation_windows %>%
-  dplyr::filter(.data$purchase_year %in% mtm_valuation_years) %>%
-  dplyr::transmute(
-    valuation_year = .data$purchase_year,
-    valuation_date = .data$purchase_date
-  )
-
-mtm_shock_deltas <- purrr::imap_dfr(baseline_valuations, function(valuation, maturity_label) {
-  purrr::map2_dfr(
-    mtm_valuation_schedule$valuation_year,
-    mtm_valuation_schedule$valuation_date,
-    function(valuation_year, valuation_date) {
-      tontine_compare_mtm_shock(
-        baseline_holdings = valuation$country_holdings,
-        baseline_curve_models = baseline_curve_models,
-        shocked_curve_models = shock_curve_models$usa_l_100bps_decay_2015_2020,
-        mats = mats,
-        mat_names = mat_names,
-        valuation_date = valuation_date,
-        shock_label = shock_examples$usa_l_100bps_decay_2015_2020$label
+    purrr::map_dfr(seq_len(nrow(valuation_windows)), function(i) {
+      multiyr_mark_to_market_holdings(
+        holdings = model_holdings,
+        model_obj = model_obj,
+        valuation_year = valuation_windows$purchase_year[[i]],
+        valuation_date = valuation_windows$valuation_date[[i]]
       ) %>%
         dplyr::mutate(
-          ladder_maturity = maturity_label,
-          valuation_year = valuation_year
+          shock_key = .env$shock_key,
+          shock_label = .env$shock_label
         )
-    }
+    })
+  })
+}
+
+shock_country_mtm <- purrr::imap_dfr(shock_curve_models, function(curve_models, shock_key) {
+  multiyr_mark_baseline_holdings_to_curve_models(
+    holdings = baseline_holdings_all,
+    curve_models = curve_models,
+    shock_key = shock_key,
+    shock_label = shock_examples[[shock_key]]$label
   )
 })
 
-mtm_shock_summary <- mtm_shock_deltas %>%
-  dplyr::group_by(ladder_maturity, model, valuation_year, valuation_date, purchase_year, shock_label) %>%
-  dplyr::summarise(
-    baseline_mtm_value = sum(mtm_value_baseline),
-    shocked_mtm_value = sum(mtm_value_shocked),
-    mtm_value_delta = sum(mtm_value_delta),
-    mtm_value_delta_pct = mtm_value_delta / baseline_mtm_value,
-    average_zero_rate_delta = mean(mtm_zero_rate_delta),
-    .groups = "drop"
-  )
-
-mtm_total_by_valuation_year <- mtm_shock_summary %>%
-  dplyr::group_by(ladder_maturity, model, valuation_year, valuation_date, shock_label) %>%
-  dplyr::summarise(
-    baseline_mtm_value = sum(baseline_mtm_value),
-    shocked_mtm_value = sum(shocked_mtm_value),
-    total_mtm_loss = sum(mtm_value_delta),
-    total_mtm_loss_pct = total_mtm_loss / baseline_mtm_value,
-    .groups = "drop"
-  )
-
-mtm_cumulative_cohort_summary <- mtm_shock_summary %>%
-  dplyr::arrange(ladder_maturity, model, valuation_year, purchase_year) %>%
-  dplyr::group_by(ladder_maturity, model, valuation_year, valuation_date, shock_label) %>%
-  dplyr::mutate(
-    cumulative_mtm_loss = cumsum(mtm_value_delta),
-    cumulative_baseline_mtm_value = cumsum(baseline_mtm_value),
-    cumulative_mtm_loss_pct = cumulative_mtm_loss / cumulative_baseline_mtm_value
+shock_country_mtm_summary <- shock_country_mtm %>%
+  dplyr::group_by(
+    shock_key, shock_label, strategy, model,
+    valuation_year, valuation_date, country
   ) %>%
-  dplyr::ungroup()
-
-mtm_country_summary <- mtm_shock_deltas %>%
-  dplyr::group_by(ladder_maturity, model, valuation_year, valuation_date, country, shock_label) %>%
   dplyr::summarise(
-    baseline_mtm_value = sum(mtm_value_baseline),
-    shocked_mtm_value = sum(mtm_value_shocked),
-    country_mtm_loss = sum(mtm_value_delta),
-    country_mtm_loss_pct = country_mtm_loss / baseline_mtm_value,
-    average_zero_rate_delta = mean(mtm_zero_rate_delta),
+    shocked_mtm_value = sum(mtm_value),
+    shocked_mtm_profit_loss = sum(mtm_profit_loss),
+    active_holding_count = dplyr::n_distinct(purchase_year),
     .groups = "drop"
-  )
-
-mtm_5y_gain_diagnostic <- mtm_shock_deltas %>%
-  dplyr::filter(.data$ladder_maturity == "5Y", .data$valuation_year %in% 2015:2016) %>%
-  dplyr::group_by(model, valuation_year, country) %>%
-  dplyr::summarise(
-    baseline_mtm_value = sum(mtm_value_baseline),
-    shocked_mtm_value = sum(mtm_value_shocked),
-    mtm_value_delta = sum(mtm_value_delta),
-    average_zero_rate_delta = mean(mtm_zero_rate_delta),
-    .groups = "drop"
+  ) %>%
+  dplyr::mutate(country = toupper(.data$country)) %>%
+  dplyr::left_join(
+    baseline_country_mtm_summary %>%
+      dplyr::filter(.data$model %in% shock_model_names) %>%
+      dplyr::select(
+        strategy, model, valuation_year, country,
+        baseline_mtm_value = mtm_value,
+        baseline_mtm_profit_loss = mtm_profit_loss
+      ),
+    by = c("strategy", "model", "valuation_year", "country")
   ) %>%
   dplyr::mutate(
-    diagnostic_note = dplyr::case_when(
-      mtm_value_delta > 0 & average_zero_rate_delta < 0 ~
-        "MTM gain is driven by model-implied lower shocked remaining rates.",
-      mtm_value_delta > 0 & average_zero_rate_delta >= 0 ~
-        "MTM gain occurs despite higher average rates; inspect country/maturity mix.",
-      TRUE ~ "MTM loss is directionally consistent with higher shocked remaining rates."
-    )
+    mtm_value_delta = .data$shocked_mtm_value - .data$baseline_mtm_value,
+    mtm_profit_loss_delta =
+      .data$shocked_mtm_profit_loss - .data$baseline_mtm_profit_loss
   ) %>%
-  dplyr::arrange(valuation_year, model, country)
+  dplyr::arrange(shock_label, strategy, valuation_year, country, model)
 
-mtm_shock_summary
-mtm_cumulative_cohort_summary
-mtm_total_by_valuation_year
-mtm_country_summary
-mtm_5y_gain_diagnostic
+shock_country_mtm_summary
 ```
 
 ## Visualizations
@@ -367,156 +857,369 @@ model_palette <- c(
   DLY = "#59A14F",
   MCE = "#C94C4C"
 )
+year_breaks <- reporting_years
+shock_model_palette <- model_palette[shock_model_names]
+shock_scenario_labels <- vapply(shock_examples, `[[`, character(1), "label")
+
+format_multiyr_shock_label <- function(scenario_label) {
+  if (identical(scenario_label, "Global L +30% average level linear decay 2015-2020")) {
+    "+30% Global L Decay Shock"
+  } else if (identical(scenario_label, "Global L increasing positive average level shock 2015-2020")) {
+    "+30% Global L Increase Shock"
+  } else {
+    scenario_label
+  }
+}
 
 baseline_plot_data <- baseline_rung_summary %>%
   dplyr::mutate(model = factor(model, levels = model_levels))
 
-mtm_plot_data <- mtm_shock_summary %>%
+baseline_total_mtm_plot_data <- baseline_total_mtm_summary %>%
   dplyr::mutate(model = factor(model, levels = model_levels))
 
-mtm_cumulative_plot_data <- mtm_cumulative_cohort_summary %>%
+baseline_country_mtm_plot_data <- baseline_country_mtm_summary %>%
   dplyr::mutate(model = factor(model, levels = model_levels))
 
-mtm_total_plot_data <- mtm_total_by_valuation_year %>%
-  dplyr::mutate(model = factor(model, levels = model_levels))
+shock_country_mtm_plot_data <- shock_country_mtm_summary %>%
+  dplyr::mutate(
+    model = factor(model, levels = shock_model_names),
+    shock_label = factor(.data$shock_label, levels = shock_scenario_labels)
+  )
 
-mtm_country_plot_data <- mtm_country_summary %>%
-  dplyr::mutate(model = factor(model, levels = model_levels))
+average_mtm_position_y_limits <- build_multiyr_plot_y_limits(
+  baseline_plot_data$average_mtm_position_end
+)
+mtm_nav_y_limits <- build_multiyr_plot_y_limits(
+  baseline_total_mtm_plot_data$mtm_nav_end
+)
+country_mtm_value_y_limits <- build_multiyr_plot_y_limits(
+  baseline_country_mtm_plot_data$mtm_value
+)
+country_mtm_pl_y_limits <- build_multiyr_plot_y_limits(
+  baseline_country_mtm_plot_data$mtm_profit_loss,
+  symmetric = TRUE
+)
+shock_country_mtm_pl_delta_y_limits <- build_multiyr_plot_y_limits(
+  shock_country_mtm_plot_data$mtm_profit_loss_delta,
+  symmetric = TRUE
+)
+shock_country_mtm_pl_delta_non_usa_y_limits <- build_multiyr_plot_y_limits(
+  shock_country_mtm_plot_data %>%
+    dplyr::filter(.data$country != "USA") %>%
+    dplyr::pull(.data$mtm_profit_loss_delta),
+  symmetric = TRUE
+)
 
-build_multiyr_baseline_plot <- function(plot_data, maturity_label) {
+build_multiyr_average_mtm_position_plot <- function(plot_data, strategy_label) {
   ggplot2::ggplot(
-    plot_data %>% dplyr::filter(.data$ladder_maturity == maturity_label),
-    ggplot2::aes(x = purchase_year, y = rung_profit_loss, color = model)
+    plot_data %>% dplyr::filter(.data$strategy == strategy_label),
+    ggplot2::aes(x = purchase_year, y = average_mtm_position_end, color = model)
   ) +
-    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
     ggplot2::geom_line(linewidth = 0.8) +
     ggplot2::geom_point(size = 1.8) +
     ggplot2::scale_color_manual(values = model_palette, drop = FALSE) +
-    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::scale_x_continuous(breaks = year_breaks, minor_breaks = NULL) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format(), limits = average_mtm_position_y_limits) +
     ggplot2::labs(
-      title = paste("Baseline Bond P/L by Rung:", maturity_label),
-      x = "Purchase Year",
-      y = "Rung Bond P/L",
+      title = paste("Baseline Average Survivor MTM Wealth:", strategy_label),
+      x = "Valuation Year",
+      y = "Average Survivor MTM Wealth",
       color = "Model"
     ) +
     ggplot2::theme_minimal()
 }
 
-build_multiyr_mtm_cumulative_cohort_plot <- function(plot_data, maturity_label, valuation_year_value) {
+build_multiyr_mtm_nav_plot <- function(plot_data, strategy_label) {
+  ggplot2::ggplot(
+    plot_data %>% dplyr::filter(.data$strategy == strategy_label),
+    ggplot2::aes(x = valuation_year, y = mtm_nav_end, color = model)
+  ) +
+    ggplot2::geom_line(linewidth = 0.8) +
+    ggplot2::geom_point(size = 1.8) +
+    ggplot2::scale_color_manual(values = model_palette, drop = FALSE) +
+    ggplot2::scale_x_continuous(breaks = year_breaks, minor_breaks = NULL) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format(), limits = mtm_nav_y_limits) +
+    ggplot2::labs(
+      title = paste("Baseline MTM Portfolio Value:", strategy_label),
+      x = "Valuation Year",
+      y = "MTM Portfolio Value",
+      color = "Model"
+    ) +
+    ggplot2::theme_minimal()
+}
+
+build_multiyr_country_mtm_value_plot <- function(plot_data, strategy_label, country_name) {
+  country_label <- toupper(country_name)
+
   ggplot2::ggplot(
     plot_data %>%
       dplyr::filter(
-        .data$ladder_maturity == maturity_label,
-        .data$valuation_year == valuation_year_value
+        .data$strategy == strategy_label,
+        .data$country == country_label
       ),
-    ggplot2::aes(
-      x = factor(purchase_year),
-      y = cumulative_mtm_loss,
-      fill = model
-    )
+    ggplot2::aes(x = valuation_year, y = mtm_value, color = model)
   ) +
-    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
-    ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.78), width = 0.7) +
-    ggplot2::scale_fill_manual(values = model_palette, drop = FALSE) +
-    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
-    ggplot2::labs(
-      title = paste("Cumulative MTM Loss by Rung:", maturity_label, valuation_year_value),
-      x = "Original Purchase Year",
-      y = "Cumulative MTM Loss",
-      fill = "Model"
-    ) +
-    ggplot2::theme_minimal()
-}
-
-build_multiyr_mtm_total_plot <- function(plot_data, maturity_label) {
-  ggplot2::ggplot(
-    plot_data %>% dplyr::filter(.data$ladder_maturity == maturity_label),
-    ggplot2::aes(x = valuation_year, y = total_mtm_loss, color = model)
-  ) +
-    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
     ggplot2::geom_line(linewidth = 0.8) +
     ggplot2::geom_point(size = 1.8) +
     ggplot2::scale_color_manual(values = model_palette, drop = FALSE) +
-    ggplot2::scale_x_continuous(breaks = mtm_valuation_years) +
-    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::scale_x_continuous(breaks = year_breaks, minor_breaks = NULL) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format(), limits = country_mtm_value_y_limits) +
     ggplot2::labs(
-      title = paste("Total MTM Loss by Shock Valuation Year:", maturity_label),
-      x = "Shock Valuation Year",
-      y = "Total MTM Loss",
+      title = paste("Baseline Country MTM Bond Value:", strategy_label, country_label),
+      x = "Valuation Year",
+      y = "Country MTM Bond Value",
       color = "Model"
     ) +
     ggplot2::theme_minimal()
 }
 
-build_multiyr_country_mtm_plot <- function(plot_data, maturity_label, country_name) {
+build_multiyr_country_mtm_pl_plot <- function(plot_data, strategy_label, country_name) {
+  country_label <- toupper(country_name)
+
   ggplot2::ggplot(
     plot_data %>%
       dplyr::filter(
-        .data$ladder_maturity == maturity_label,
-        .data$country == country_name
+        .data$strategy == strategy_label,
+        .data$country == country_label
       ),
-    ggplot2::aes(x = valuation_year, y = country_mtm_loss, color = model)
+    ggplot2::aes(x = valuation_year, y = mtm_profit_loss, color = model)
   ) +
     ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
     ggplot2::geom_line(linewidth = 0.8) +
     ggplot2::geom_point(size = 1.8) +
     ggplot2::scale_color_manual(values = model_palette, drop = FALSE) +
-    ggplot2::scale_x_continuous(breaks = mtm_valuation_years) +
-    ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
+    ggplot2::scale_x_continuous(breaks = year_breaks, minor_breaks = NULL) +
+    ggplot2::scale_y_continuous(labels = scales::dollar_format(), limits = country_mtm_pl_y_limits) +
     ggplot2::labs(
-      title = paste("Country MTM Loss:", maturity_label, toupper(country_name)),
-      x = "Shock Valuation Year",
-      y = "Country MTM Loss",
+      title = paste("Baseline Country MTM P/L:", strategy_label, country_label),
+      x = "Valuation Year",
+      y = "Country MTM P/L",
       color = "Model"
     ) +
     ggplot2::theme_minimal()
 }
 
-mtm_cumulative_cohort_plots <- setNames(lapply(names(maturity_specs), function(maturity_label) {
-  setNames(lapply(mtm_valuation_years, function(valuation_year_value) {
-    build_multiyr_mtm_cumulative_cohort_plot(
-      mtm_cumulative_plot_data,
-      maturity_label,
-      valuation_year_value
-    )
-  }), as.character(mtm_valuation_years))
-}), names(maturity_specs))
-
-mtm_country_plots <- setNames(lapply(names(maturity_specs), function(maturity_label) {
+country_mtm_value_plots <- setNames(lapply(names(strategy_specs), function(strategy_label) {
   setNames(lapply(curves, function(country_name) {
-    build_multiyr_country_mtm_plot(mtm_country_plot_data, maturity_label, country_name)
+    build_multiyr_country_mtm_value_plot(
+      baseline_country_mtm_plot_data,
+      strategy_label,
+      country_name
+    )
   }), curves)
-}), names(maturity_specs))
+}), names(strategy_specs))
+
+country_mtm_plots <- setNames(lapply(names(strategy_specs), function(strategy_label) {
+  setNames(lapply(curves, function(country_name) {
+    build_multiyr_country_mtm_pl_plot(
+      baseline_country_mtm_plot_data,
+      strategy_label,
+      country_name
+    )
+  }), curves)
+}), names(strategy_specs))
+
+build_multiyr_country_shock_mtm_pl_delta_plot <- function(plot_data, strategy_label,
+                                                          country_name, scenario_label) {
+  country_label <- toupper(country_name)
+  y_limits <- if (country_label == "USA") {
+    shock_country_mtm_pl_delta_y_limits
+  } else {
+    shock_country_mtm_pl_delta_non_usa_y_limits
+  }
+
+  ggplot2::ggplot(
+    plot_data %>%
+      dplyr::filter(
+        .data$strategy == strategy_label,
+        .data$country == country_label,
+        .data$shock_label == scenario_label
+      ),
+    ggplot2::aes(x = valuation_year, y = mtm_profit_loss_delta, color = model)
+  ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+    ggplot2::geom_line(linewidth = 0.8) +
+    ggplot2::geom_point(size = 1.8) +
+    ggplot2::scale_color_manual(values = shock_model_palette, drop = FALSE) +
+    ggplot2::scale_x_continuous(breaks = year_breaks, minor_breaks = NULL) +
+    ggplot2::scale_y_continuous(
+      labels = scales::dollar_format(),
+      limits = y_limits
+    ) +
+    ggplot2::labs(
+      title = paste(
+        "Shock Country MTM P/L Delta:",
+        strategy_label,
+        country_label,
+        format_multiyr_shock_label(as.character(scenario_label))
+      ),
+      x = "Valuation Year",
+      y = "Change in Country MTM P/L",
+      color = "Model"
+    ) +
+    ggplot2::theme_minimal()
+}
+
+country_shock_mtm_pl_delta_plots <- purrr::imap(shock_scenario_labels, function(scenario_label, shock_key) {
+  setNames(lapply(names(strategy_specs), function(strategy_label) {
+    setNames(lapply(curves, function(country_name) {
+      build_multiyr_country_shock_mtm_pl_delta_plot(
+        shock_country_mtm_plot_data,
+        strategy_label,
+        country_name,
+        scenario_label
+      )
+    }), curves)
+  }), names(strategy_specs))
+})
 ```
 
-```{r plot-baseline-2y-rung-pl}
-build_multiyr_baseline_plot(baseline_plot_data, "2Y")
+```{r plot-average-survivor-wealth-5y}
+build_multiyr_average_mtm_position_plot(baseline_plot_data, "5Y")
 ```
 
-```{r plot-baseline-5y-rung-pl}
-build_multiyr_baseline_plot(baseline_plot_data, "5Y")
+```{r plot-average-survivor-wealth-10y}
+build_multiyr_average_mtm_position_plot(baseline_plot_data, "10Y")
 ```
 
-```{r plot-mtm-cumulative-cohort-loss-2y-2016}
-mtm_cumulative_cohort_plots$`2Y`$`2016`
+```{r plot-mtm-portfolio-value-5y}
+build_multiyr_mtm_nav_plot(baseline_total_mtm_plot_data, "5Y")
 ```
 
-```{r plot-mtm-cumulative-cohort-loss-5y-2016}
-mtm_cumulative_cohort_plots$`5Y`$`2016`
+```{r plot-mtm-portfolio-value-10y}
+build_multiyr_mtm_nav_plot(baseline_total_mtm_plot_data, "10Y")
 ```
 
-```{r plot-mtm-total-loss-2y}
-build_multiyr_mtm_total_plot(mtm_total_plot_data, "2Y")
+```{r plot-country-mtm-value-5y-usa}
+country_mtm_value_plots$`5Y`$usa
 ```
 
-```{r plot-mtm-total-loss-5y}
-build_multiyr_mtm_total_plot(mtm_total_plot_data, "5Y")
+```{r plot-country-mtm-value-5y-gbr}
+country_mtm_value_plots$`5Y`$gbr
 ```
 
-```{r plot-country-mtm-loss-2y-usa}
-mtm_country_plots$`2Y`$usa
+```{r plot-country-mtm-value-5y-jpn}
+country_mtm_value_plots$`5Y`$jpn
 ```
 
-```{r plot-country-mtm-loss-5y-usa}
-mtm_country_plots$`5Y`$usa
+```{r plot-country-mtm-value-5y-ger}
+country_mtm_value_plots$`5Y`$ger
+```
+
+```{r plot-country-mtm-value-10y-usa}
+country_mtm_value_plots$`10Y`$usa
+```
+
+```{r plot-country-mtm-value-10y-gbr}
+country_mtm_value_plots$`10Y`$gbr
+```
+
+```{r plot-country-mtm-value-10y-jpn}
+country_mtm_value_plots$`10Y`$jpn
+```
+
+```{r plot-country-mtm-value-10y-ger}
+country_mtm_value_plots$`10Y`$ger
+```
+
+```{r plot-country-mtm-pl-5y-usa}
+country_mtm_plots$`5Y`$usa
+
+```
+
+```{r plot-country-mtm-pl-5y-gbr}
+country_mtm_plots$`5Y`$gbr
+```
+
+```{r plot-country-mtm-pl-5y-jpn}
+country_mtm_plots$`5Y`$jpn
+```
+
+```{r plot-country-mtm-pl-5y-ger}
+country_mtm_plots$`5Y`$ger
+```
+
+```{r plot-country-mtm-pl-10y-usa}
+country_mtm_plots$`10Y`$usa
+```
+
+```{r plot-country-mtm-pl-10y-gbr}
+country_mtm_plots$`10Y`$gbr
+```
+
+```{r plot-country-mtm-pl-10y-jpn}
+country_mtm_plots$`10Y`$jpn
+```
+
+```{r plot-country-mtm-pl-10y-ger}
+country_mtm_plots$`10Y`$ger
+```
+
+```{r plot-shock-country-mtm-pl-delta-decay-5y-usa}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_decay_2015_2020$`5Y`$usa
+```
+
+```{r plot-shock-country-mtm-pl-delta-decay-5y-gbr}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_decay_2015_2020$`5Y`$gbr
+```
+
+```{r plot-shock-country-mtm-pl-delta-decay-5y-jpn}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_decay_2015_2020$`5Y`$jpn
+```
+
+```{r plot-shock-country-mtm-pl-delta-decay-5y-ger}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_decay_2015_2020$`5Y`$ger
+```
+
+```{r plot-shock-country-mtm-pl-delta-decay-10y-usa}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_decay_2015_2020$`10Y`$usa
+```
+
+```{r plot-shock-country-mtm-pl-delta-decay-10y-gbr}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_decay_2015_2020$`10Y`$gbr
+```
+
+```{r plot-shock-country-mtm-pl-delta-decay-10y-jpn}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_decay_2015_2020$`10Y`$jpn
+```
+
+```{r plot-shock-country-mtm-pl-delta-decay-10y-ger}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_decay_2015_2020$`10Y`$ger
+```
+
+```{r plot-shock-country-mtm-pl-delta-increase-5y-usa}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_increase_2015_2020$`5Y`$usa
+```
+
+```{r plot-shock-country-mtm-pl-delta-increase-5y-gbr}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_increase_2015_2020$`5Y`$gbr
+```
+
+```{r plot-shock-country-mtm-pl-delta-increase-5y-jpn}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_increase_2015_2020$`5Y`$jpn
+```
+
+```{r plot-shock-country-mtm-pl-delta-increase-5y-ger}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_increase_2015_2020$`5Y`$ger
+```
+
+```{r plot-shock-country-mtm-pl-delta-increase-10y-usa}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_increase_2015_2020$`10Y`$usa
+```
+
+```{r plot-shock-country-mtm-pl-delta-increase-10y-gbr}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_increase_2015_2020$`10Y`$gbr
+```
+
+```{r plot-shock-country-mtm-pl-delta-increase-10y-jpn}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_increase_2015_2020$`10Y`$jpn
+```
+
+```{r plot-shock-country-mtm-pl-delta-increase-10y-ger}
+country_shock_mtm_pl_delta_plots$global_l_pos30pct_increase_2015_2020$`10Y`$ger
+```
+
+
+```{r}
+baseline_country_mtm_plot_data %>% filter(strategy == '5Y' & valuation_year == 2018 & country == 'USA')
 ```

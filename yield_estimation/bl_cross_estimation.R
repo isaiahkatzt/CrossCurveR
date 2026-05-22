@@ -58,6 +58,7 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
                        CR_algo=zero_mean_covreg_em, CR_init="adaptive", Xt_smooth=FALSE, smoother=c("ns", "bs", "rm", "hp", "henderson"), 
                        knot_count=5, k_count=9, k_pass=3, hp_lambda=1600, henderson_k=13,
                        CR_maxiter=1000, CR_tol=1e-8, CR_Binit=NULL, CR_S0init=NULL, CR_S0_shrink_diag=0,
+                       CR_check_every=1, CR_use_loglik=TRUE, CR_store_path=TRUE,
                        CR_verb=FALSE, CR_term=TRUE, 
                        curves, mats) {
   ## full endogenous covariate fit 
@@ -105,7 +106,9 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
   ## covariance regression and sigma estimation 
   cc_BS0_feature <- blcc_fe(Xt=Xt, Wt=W, mats=mats, covreg=CR_algo, init=CR_init, 
                             max_iter=CR_maxiter, tol=CR_tol, S0=CR_S0init, B=CR_Binit,
-                            S0_shrink_diag=CR_S0_shrink_diag, verb=CR_verb, term=CR_term) 
+                            S0_shrink_diag=CR_S0_shrink_diag, verb=CR_verb, term=CR_term,
+                            check_every=CR_check_every, use_loglik=CR_use_loglik,
+                            store_path=CR_store_path) 
   
   cc_Sigma <- tSigma_optim(BS0=cc_BS0_feature, X=Xt)
   
@@ -151,6 +154,7 @@ mc_fit_exo <- function(yields, lambdas, cutoffs, reference, Xt, X_normalize=TRUE
                        CR_algo=zero_mean_covreg, CR_init="adaptive", Xt_smooth=FALSE, smoother=c("ns", "bs", "rm", "hp", "henderson"),
                        knot_count=5, k_count=9, k_pass=3, hp_lambda=1600, henderson_k=13,
                        CR_maxiter=1000, CR_tol=1e-8, CR_Binit=NULL, CR_S0init=NULL, CR_S0_shrink_diag=0,
+                       CR_check_every=1, CR_use_loglik=TRUE, CR_store_path=TRUE,
                        CR_verb=FALSE, CR_term=TRUE, 
                        curves, mats) {
   ## full exogenous covariate fit 
@@ -193,7 +197,9 @@ mc_fit_exo <- function(yields, lambdas, cutoffs, reference, Xt, X_normalize=TRUE
   ## covariance regression and sigma estimation 
   cc_BS0_feature <- blcc_fe(Xt=Xt, Wt=W, mats=mats, covreg=CR_algo, init=CR_init, 
                             max_iter=CR_maxiter, tol=CR_tol, S0=CR_S0init, B=CR_Binit,
-                            S0_shrink_diag=CR_S0_shrink_diag, verb=CR_verb, term=CR_term) 
+                            S0_shrink_diag=CR_S0_shrink_diag, verb=CR_verb, term=CR_term,
+                            check_every=CR_check_every, use_loglik=CR_use_loglik,
+                            store_path=CR_store_path) 
   
   cc_Sigma <- tSigma_optim(BS0=cc_BS0_feature, X=Xt)
   
