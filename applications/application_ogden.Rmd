@@ -720,19 +720,24 @@ ogden_asset_liability_delta_plot <- ggplot(
   geom_col(position = position_dodge(width = 0.75), width = 0.65) +
   facet_grid(valuation_year ~ scenario_label) +
   scale_y_continuous(
-    labels = scales::dollar,
+    labels = function(x) paste0("$", x / 1000000),
     limits = ogden_asset_liability_delta_y_limits
   ) +
   labs(
     title = "Asset vs Liability PV Delta by Shock Scenario",
     x = "Model",
-    y = "PV Delta",
-    fill = NULL
+    y = "PV Delta ($MM)",
+    fill = "PV Type"
   ) +
   theme_minimal() +
   theme(
     legend.position = "bottom",
-    axis.text.x = element_text(angle = 45, hjust = 1)
+    plot.title = element_text(size = 26.4),
+    axis.title = element_text(size = 22),
+    axis.text = element_text(size = 15.5),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 15.5),
+    legend.title = element_text(size = 13),
+    strip.text = element_text(size = 14)
   )
 
 ogden_surplus_delta_plot <- ggplot(
@@ -744,16 +749,25 @@ ogden_surplus_delta_plot <- ggplot(
   facet_grid(valuation_year ~ scenario_label) +
   scale_fill_manual(values = ogden_model_palette, drop = FALSE) +
   scale_y_continuous(
-    labels = scales::dollar,
+    breaks = c(0, -20000000, -40000000, -60000000),
+    labels = function(x) {
+      ifelse(x < 0, paste0("-$", abs(x) / 1000000), paste0("$", x / 1000000))
+    },
     limits = ogden_surplus_shortfall_delta_y_limits
   ) +
   labs(
     title = "Surplus / Shortfall Delta by Shock Scenario",
     x = "Model",
-    y = "Surplus / Shortfall Delta"
+    y = "Surplus / Shortfall Delta ($MM)"
   ) +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  theme(
+    plot.title = element_text(size = 26.4),
+    axis.title = element_text(size = 22),
+    axis.text = element_text(size = 15.5),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 15.5),
+    strip.text = element_text(size = 14)
+  )
 
 ogden_shock_delta_plot <- ogden_asset_liability_delta_plot /
   ogden_surplus_delta_plot +
