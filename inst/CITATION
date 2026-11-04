@@ -1,0 +1,9 @@
+# TODO: confirm authorship before publishing this citation.
+# Add the release DOI and journal article citation when available.
+bibentry(
+  bibtype = "Manual",
+  title = "CrossCurveR: Multi-Curve Yield Modelling and Stress Testing",
+  author = person(given = "TODO", family = "Author"),
+  note = paste("R package development version", meta$Version),
+  url = "https://github.com/isaiahkatzt/CrossCurveR"
+)

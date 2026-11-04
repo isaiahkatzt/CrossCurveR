@@ -1,0 +1,23 @@
+# Development environment and repository metadata.
+^.*\.Rproj$
+^\.Rproj\.user$
+^\.Rprofile$
+^\.github$
+^renv$
+^renv\.lock$
+^plan\.md$
+^CITATION\.cff$
+^create_gitignore\.sh$
+
+# Research data, applications, and exploratory notebooks.
+^applications$
+^numerical_evals$
+^reconstructed_data$
+
+# Legacy source and tests will move into R/ and tests/ in later steps.
+^core_formatting\.R$
+^packages\.R$
+^data_formatting$
+^yield_estimation$
+^stress_testing$
+^unit_tests$

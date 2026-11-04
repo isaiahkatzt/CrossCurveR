@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: >-
+  Development skeleton: confirm author details before citing a release.
+type: software
+title: "CrossCurveR: An R Package for Multi-Yield Curve Estimation and Stress Testing"
+version: 0.0.0.9000
+authors:
+  - given-names: "TODO"
+    family-names: "Author"
+repository-code: "https://github.com/isaiahkatzt/CrossCurveR"
+url: "https://github.com/isaiahkatzt/CrossCurveR"
+license: GPL-3.0-only
+# TODO: confirm all authors and add ORCIDs and an archived release DOI.
+# Add date-released when a release is published.
