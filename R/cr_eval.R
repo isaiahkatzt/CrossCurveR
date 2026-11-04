@@ -27,14 +27,11 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
     stop("X is rank deficient. Remove collinear columns or regularize more heavily.")
   }
 
-  safe_solve <- function(A, ridge = 0) {
-    A2 <- A
-    if (ridge > 0) {
-      A2 <- A2 + Matrix::diag(ridge, nrow(A2))
-    }
-    cholA <- tryCatch(chol(A2), error = function(e) NULL)
+  # Covariance and design matrices already include their intended ridge.
+  safe_solve <- function(A) {
+    cholA <- tryCatch(chol(A), error = function(e) NULL)
     if (is.null(cholA)) {
-      Matrix::solve(A2)
+      Matrix::solve(A)
     } else {
       chol2inv(cholA)
     }
@@ -57,7 +54,7 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
   }
 
   compute_loglik <- function(W, X, B, S0) {
-    iS0 <- safe_solve(S0, ridge = ridge_S0)
+    iS0 <- safe_solve(S0)
     logdet_S0 <- as.numeric(determinant(S0, logarithm = TRUE)$modulus)
 
     ll <- 0
@@ -128,7 +125,7 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
     B_old <- B
     S0_old <- S0
 
-    iS0 <- safe_solve(S0, ridge = ridge_S0)
+    iS0 <- safe_solve(S0)
 
     # E step
     XtB <- X %*% Matrix::t(B)  # N x P

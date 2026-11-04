@@ -101,14 +101,11 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
     stop("X is rank deficient. Remove collinear columns or regularize more heavily.")
   }
 
-  safe_solve <- function(A, ridge = 0) {
-    A2 <- A
-    if (ridge > 0) {
-      A2 <- A2 + Matrix::diag(ridge, nrow(A2))
-    }
-    cholA <- tryCatch(chol(A2), error = function(e) NULL)
+  # Covariance and design matrices already include their intended ridge.
+  safe_solve <- function(A) {
+    cholA <- tryCatch(chol(A), error = function(e) NULL)
     if (is.null(cholA)) {
-      Matrix::solve(A2)
+      Matrix::solve(A)
     } else {
       chol2inv(cholA)
     }
@@ -131,7 +128,7 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
   }
 
   compute_loglik <- function(W, X, B, Psi) {
-    iPsi <- safe_solve(Psi, ridge = ridge_S0)
+    iPsi <- safe_solve(Psi)
     logdet_Psi <- as.numeric(determinant(Psi, logarithm = TRUE)$modulus)
 
     ll <- 0
@@ -152,7 +149,7 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
 
   Psi <- if (is.null(S0)) stats::cov(W) else as.matrix(S0)
   Psi <- regularize_Psi(Psi)
-  iPsi <- safe_solve(Psi, ridge = ridge_S0)
+  iPsi <- safe_solve(Psi)
 
   if (is.null(B)) {
     if (init == "static") {
