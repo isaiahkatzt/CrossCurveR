@@ -7,5 +7,6 @@
 - Make timestamp filtering independent of optional date-comparison methods.
 - Normalize maturity labels before reconstruction and reject invalid or duplicate tenors.
 - Add `dr_read_yields()` for validated CSV input without automatic header repair.
+- Resolve `zero_mean_covreg()` initialization choices so the default uses adaptive initialization.
 
 <!-- TODO: record changes here as each implementation step is completed. -->

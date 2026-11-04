@@ -4,6 +4,7 @@
 
 zero_mean_covreg <- function(W, X, init = c("adaptive", "static"), max_iter = 1000, tol = 1e-10, S0 = NULL, B = NULL,
                              S0_shrink_diag = 0, verb = FALSE, term = FALSE) {
+  init <- match.arg(init)
   bnorm = 1e10; snorm = 1e10
   W <- as.matrix(W)
   P <- ncol(W); Q <- ncol(X); N <- nrow(W)

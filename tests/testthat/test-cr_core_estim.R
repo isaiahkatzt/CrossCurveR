@@ -11,6 +11,18 @@ test_that("zero_mean_covreg returns correctly shaped covariance-regression outpu
   expect_equal(dim(fit$B), c(ncol(W), ncol(X)))
 })
 
+test_that("zero_mean_covreg defaults to adaptive initialization", {
+  W <- cbind(seq(1, 10), seq(1, 10)^2)
+  X <- cbind(1, seq(-1, 1, length.out = 10))
+
+  set.seed(123)
+  default_fit <- zero_mean_covreg(W, X, max_iter = 5)
+  set.seed(123)
+  adaptive_fit <- zero_mean_covreg(W, X, init = "adaptive", max_iter = 5)
+
+  expect_identical(default_fit, adaptive_fit)
+})
+
 test_that("zero_mean_covreg supports adaptive initialization and early termination mode", {
   set.seed(123)
   W <- cbind(seq(1, 12), seq(1, 12)^2)
