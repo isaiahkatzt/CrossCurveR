@@ -13,7 +13,7 @@ st_factor_names <- function(factor_dim) {
 }
 
 st_extract_ns_factor <- function(bl_yields, curves) {
-  setNames(lapply(curves, function(curve_name) {
+  stats::setNames(lapply(curves, function(curve_name) {
     factor_mat <- as.matrix(bl_yields$betas[[curve_name]]$NSbetas)
     colnames(factor_mat) <- st_factor_names(ncol(factor_mat))
     factor_mat
@@ -46,20 +46,20 @@ st_validate_yields_input <- function(yields, curves, reference) {
 
 st_prepare_single_curve_state <- function(yields, lambdas, cutoffs, curves, mats) {
   mat_str <- sapply(mats, numeric_to_matname)
-  mds <- as.vector(t(outer(curves, mat_str, paste, sep = ".")))
+  mds <- as.vector(Matrix::t(outer(curves, mat_str, paste, sep = ".")))
   ytime <- yields[[1]][[1]]
   curve_lambdas <- vapply(yields, function(curve_yield) {
     lambda_grid_search(lambdas, curve_yield, mats)
   }, numeric(1))
 
-  curve_fits <- setNames(lapply(seq_along(curves), function(i) {
+  curve_fits <- stats::setNames(lapply(seq_along(curves), function(i) {
     bl_single_curve(curve_lambdas[[i]], yields[[i]], cutoffs, mats)
   }), curves)
 
   bl_yields <- purrr::transpose(curve_fits)
   phi_hat <- bln_phi_hat(bl_yields$phi, mds)
   W <- blcc_build_Wj(bl_yields$nsfit, mats)
-  H <- bdiag(bl_yields$H)
+  H <- Matrix::bdiag(bl_yields$H)
 
   return(list(
     curves = curves,
@@ -80,7 +80,7 @@ st_build_xt_from_ecm <- function(bl_yields, curves, reference, curve_ecm, X_norm
                                  X_trunc = FALSE) {
   cc_betas <- blmc_VAR(bl_yields, reference, curves)
 
-  cc_cspread <- setNames(lapply(names(cc_betas), function(curve_name) {
+  cc_cspread <- stats::setNames(lapply(names(cc_betas), function(curve_name) {
     ecm_obj <- curve_ecm[[curve_name]]
     if (is.list(ecm_obj) && is.numeric(ecm_obj$rank) &&
         length(ecm_obj$rank) == 1 && ecm_obj$rank > 0) {
@@ -187,7 +187,7 @@ st_build_shocked_curve_state <- function(single_curve_state, shocked_factors) {
   curves <- single_curve_state$curves
   factor_names <- st_factor_names(ncol(as.matrix(shocked_factors[[1]])))
 
-  shocked_curve_fits <- setNames(lapply(curves, function(curve_name) {
+  shocked_curve_fits <- stats::setNames(lapply(curves, function(curve_name) {
     curve_phi <- single_curve_state$bl_yields$phi[[curve_name]]
     baseline_nsfit <- single_curve_state$bl_yields$nsfit[[curve_name]]
     shocked_beta <- as.matrix(shocked_factors[[curve_name]])
@@ -213,7 +213,7 @@ st_build_shocked_curve_state <- function(single_curve_state, shocked_factors) {
 
   shocked_bl_yields <- purrr::transpose(shocked_curve_fits)
 
-  shocked_yields <- setNames(lapply(curves, function(curve_name) {
+  shocked_yields <- stats::setNames(lapply(curves, function(curve_name) {
     curve_time <- single_curve_state$yields[[curve_name]][[1]]
     curve_cols <- colnames(single_curve_state$yields[[curve_name]])[-1]
     curve_df <- data.frame(
@@ -229,7 +229,7 @@ st_build_shocked_curve_state <- function(single_curve_state, shocked_factors) {
     bl_yields = shocked_bl_yields,
     phi_hat = single_curve_state$phi_hat,
     W = blcc_build_Wj(shocked_bl_yields$nsfit, single_curve_state$mats),
-    ns_factor = setNames(lapply(curves, function(curve_name) {
+    ns_factor = stats::setNames(lapply(curves, function(curve_name) {
       shocked_bl_yields$betas[[curve_name]]$NSbetas
     }), curves)
   ))
@@ -292,7 +292,7 @@ st_apply_factor_shock_profile <- function(curves, curve_dns_factor,
   factor_idx <- match(shock_factors, model_factors)
   shock_magnitudes <- as.numeric(shock_magnitudes)
 
-  shocked_curve_dns_factor <- setNames(lapply(names(curve_dns_factor), function(curve_name) {
+  shocked_curve_dns_factor <- stats::setNames(lapply(names(curve_dns_factor), function(curve_name) {
     curve_factor_mat <- as.matrix(curve_dns_factor[[curve_name]])
     if (nrow(curve_factor_mat) != length(shock_magnitudes)) {
       stop("Shock profile length must match the number of factor rows.")
@@ -354,7 +354,7 @@ st_build_shocked_dly_single_curve <- function(dly_single_curve, shocked_factors,
                                               curves = names(dly_single_curve)) {
   factor_names <- st_factor_names(ncol(as.matrix(shocked_factors[[1]])))
 
-  setNames(lapply(curves, function(curve_name) {
+  stats::setNames(lapply(curves, function(curve_name) {
     baseline_curve <- dly_single_curve[[curve_name]]
     shocked_beta <- as.matrix(shocked_factors[[curve_name]])
     colnames(shocked_beta) <- factor_names
@@ -387,8 +387,8 @@ st_dly_project_global_factor <- function(factor_draw, global_factor_obj) {
 }
 
 st_dly_predict_country_factor <- function(factor_model, global_factor, curves) {
-  intercept <- setNames(as.numeric(factor_model$intercept[curves]), curves)
-  loading <- setNames(as.numeric(factor_model$loading[curves]), curves)
+  intercept <- stats::setNames(as.numeric(factor_model$intercept[curves]), curves)
+  loading <- stats::setNames(as.numeric(factor_model$loading[curves]), curves)
 
   fitted <- outer(as.numeric(global_factor), loading)
   fitted <- sweep(fitted, 2, intercept, FUN = "+")
@@ -769,7 +769,7 @@ st_finalize_shocked_fit <- function(yields, time, phi_hat, Xt, BS0, curves, mats
   yb <- bln_YB(pY$py, sqrt_inv_sigma_t)
   phib <- bln_phi_BT(phi_hat, P, sqrt_inv_sigma_t)
   phic <- bln_phi_CT(phib, P)
-  yc <- PY_full(yb, t(P))
+  yc <- PY_full(yb, Matrix::t(P))
 
   ycut <- cf_curve_cut(yc$py, curves, mats)
   phicut <- cf_phi_cut(phic, curves, mats)

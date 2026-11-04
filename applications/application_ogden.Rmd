@@ -16,20 +16,16 @@ country weights, and an inception asset portfolio whose future cashflows match
 the liability cashflows.
 
 ```{r libraries}
+library(CrossCurveR)
 library(here)
 library(dplyr)
 library(purrr)
 library(tibble)
 library(ggplot2)
 library(patchwork)
-library(Matrix)
-library(vars)
-library(tsDyn)
 
-sys.source(here::here("core_formatting.R"), envir = .GlobalEnv)
-sys.source(here::here("applications", "tontine_helpers.R"), envir = .GlobalEnv)
-sys.source(here::here("applications", "ogden_helpers.R"), envir = .GlobalEnv)
-tontine_source_project()
+source(here::here("applications", "tontine_helpers.R"), local = TRUE)
+source(here::here("applications", "ogden_helpers.R"), local = TRUE)
 ```
 
 ```{r configuration}

@@ -173,7 +173,7 @@ st_additive <- function(curves, curve_dns_factor, shock_curves, shock_factors,
   st_warn_large_shocks(shock_matrix)
   shock_matrix[is.na(shock_matrix)] <- 0
 
-  shocked_curve_dns_factor <- setNames(lapply(names(curve_dns_factor), function(curve_name) {
+  shocked_curve_dns_factor <- stats::setNames(lapply(names(curve_dns_factor), function(curve_name) {
     curve_factor_mat <- as.matrix(curve_dns_factor[[curve_name]])
 
     if (ncol(curve_factor_mat) != factor_dim) {
@@ -241,7 +241,7 @@ st_multiplicative <- function(curves, curve_dns_factor, shock_curves, shock_fact
   shock_matrix[is.na(shock_matrix)] <- 0
   shock_matrix <- shock_matrix + 1
 
-  shocked_curve_dns_factor <- setNames(lapply(names(curve_dns_factor), function(curve_name) {
+  shocked_curve_dns_factor <- stats::setNames(lapply(names(curve_dns_factor), function(curve_name) {
     curve_factor_mat <- as.matrix(curve_dns_factor[[curve_name]])
 
     if (ncol(curve_factor_mat) != factor_dim) {

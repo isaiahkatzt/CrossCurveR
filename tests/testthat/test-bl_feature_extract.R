@@ -1,7 +1,7 @@
 test_that("blmc_phi stacks curve phi matrices from its input list", {
   blsc_list <- make_mock_blsc_list()
   phi_hat <- blmc_phi(blsc_list)
-  expected_phi <- do.call(rbind, lapply(blsc_list$phi, function(curve) t(curve$phi)))
+  expected_phi <- do.call(rbind, lapply(blsc_list$phi, function(curve) Matrix::t(curve$phi)))
 
   expect_equal(dim(phi_hat), c(length(fixture_curves) * length(fixture_mats), 3))
   expect_equal(unname(phi_hat), unname(expected_phi), tolerance = tol)
@@ -55,7 +55,7 @@ test_that("blmc_ECM handles the zero-rank case", {
 
 test_that("spread and reversion helpers normalize and rank feature blocks", {
   cc_betas <- matrix(1:12, ncol = 3)
-  G <- diag(3)
+  G <- Matrix::diag(3)
   spread <- blmc_cspread(cc_betas, G, normalize = TRUE)
 
   expect_equal(unname(round(colMeans(spread), 8)), c(0, 0, 0))
@@ -66,7 +66,7 @@ test_that("spread and reversion helpers normalize and rank feature blocks", {
 test_that("blmc_cspread prefixes spread columns with the non-reference curve name", {
   cc_betas <- matrix(seq_len(18), ncol = 6)
   colnames(cc_betas) <- c("usa.L", "usa.S", "usa.C", "gbr.L", "gbr.S", "gbr.C")
-  G <- diag(6)[, 1:2, drop = FALSE]
+  G <- Matrix::diag(6)[, 1:2, drop = FALSE]
   colnames(G) <- c("r1", "r2")
 
   spread <- blmc_cspread(cc_betas, G, curve_name = "gbr", normalize = FALSE)
@@ -80,7 +80,7 @@ test_that("blcc_cointegration, Xt builders, and Wj builders assemble expected st
   cointegration <- with_temp_bindings(
     list(
       blmc_VAR = function(...) list(gbr = matrix(1:12, ncol = 3)),
-      blmc_ECM = function(...) list(Fmatrix = matrix(c(3, 0, 0, 1), nrow = 2), Gmatrix = diag(3), rank = 1),
+      blmc_ECM = function(...) list(Fmatrix = matrix(c(3, 0, 0, 1), nrow = 2), Gmatrix = Matrix::diag(3), rank = 1),
       blmc_cspread = function(..., curve_name) {
         out <- matrix(1:9, ncol = 3)
         colnames(out) <- paste0(curve_name, ".", paste0("r", 1:3))
@@ -117,17 +117,17 @@ test_that("feature-extraction wrappers and sigma optimizers return structured ou
     Xt,
     Wt,
     fixture_mats,
-    covreg = function(W, X, ...) list(S0 = diag(ncol(W)), B = matrix(1, nrow = ncol(W), ncol = ncol(X)))
+    covreg = function(W, X, ...) list(S0 = Matrix::diag(ncol(W)), B = matrix(1, nrow = ncol(W), ncol = ncol(X)))
   )
 
   expect_equal(names(BS0), names(Wt))
 
-  sigma_j <- sigma_jt_optim(list(S0 = diag(2), B = matrix(c(1, 0, 0, 1), nrow = 2)), c(1, 2))
-  sigma_path <- jSigma_optim(list(S0 = diag(2), B = matrix(c(1, 0, 0, 1), nrow = 2)), Xt)
+  sigma_j <- sigma_jt_optim(list(S0 = Matrix::diag(2), B = matrix(c(1, 0, 0, 1), nrow = 2)), c(1, 2))
+  sigma_path <- jSigma_optim(list(S0 = Matrix::diag(2), B = matrix(c(1, 0, 0, 1), nrow = 2)), Xt)
   sigma_time <- tSigma_optim(
     list(
-      a = list(S0 = diag(2), B = matrix(c(1, 0, 0, 1), nrow = 2)),
-      b = list(S0 = diag(2), B = matrix(c(1, 0, 0, 1), nrow = 2))
+      a = list(S0 = Matrix::diag(2), B = matrix(c(1, 0, 0, 1), nrow = 2)),
+      b = list(S0 = Matrix::diag(2), B = matrix(c(1, 0, 0, 1), nrow = 2))
     ),
     Xt
   )
@@ -158,10 +158,10 @@ test_that("time smoothers build knot points, spline bases, and rolling averages"
 test_that("HP smoother returns same-shaped smoothed features", {
   xt <- sin(seq(0, 4 * pi, length.out = length(fixture_time))) + rep(c(-0.2, 0.2), length.out = length(fixture_time))
   X <- cbind(a = xt, b = xt + seq_along(xt) / 10)
-  
+
   hp_smooth <- fe_xt_hp(X, lambda = 1600)
   hp_vector <- fe_xt_hp(xt, lambda = 1600)
-  
+
   expect_equal(dim(hp_smooth), dim(X))
   expect_equal(colnames(hp_smooth), colnames(X))
   expect_equal(length(hp_vector), length(xt))
@@ -172,10 +172,10 @@ test_that("HP smoother returns same-shaped smoothed features", {
 test_that("Henderson smoother returns same-shaped smoothed features", {
   xt <- sin(seq(0, 4 * pi, length.out = length(fixture_time))) + rep(c(-0.2, 0.2), length.out = length(fixture_time))
   X <- cbind(a = xt, b = xt + seq_along(xt) / 10)
-  
+
   henderson_smooth <- fe_xt_henderson(X, k = 13)
   henderson_vector <- fe_xt_henderson(xt, k = 13)
-  
+
   expect_equal(dim(henderson_smooth), dim(X))
   expect_equal(colnames(henderson_smooth), colnames(X))
   expect_equal(length(henderson_vector), length(xt))

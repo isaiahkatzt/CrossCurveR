@@ -6,22 +6,78 @@ multi-curve estimation (MCE).
 
 ## Development status
 
-Package scaffolding is in progress on the `crosscurveR-package` branch.
-This skeleton does not yet provide an installable modelling API. Existing
-research scripts and applications remain in their current locations.
-
-TODO: confirm author and maintainer details, supported R versions, and
-runtime and development dependencies before the first package release.
+Package development is in progress on the `crosscurveR-package` branch.
+Reusable code now lives in `R/` and loads through the package namespace.
+API documentation, numerical validation, and publication examples remain
+work in progress; see [plan.md](plan.md).
 
 ## Installation
 
-TODO: add GitHub installation instructions after the package namespace,
-dependencies, and reusable code are in place.
+From R, install the development branch and its runtime dependencies:
 
-## Quick start
+```r
+# Run once if remotes is not already installed:
+install.packages("remotes")
+remotes::install_github("isaiahkatzt/CrossCurveR", ref = "crosscurveR-package")
+library(CrossCurveR)
+```
+
+For a local checkout with the declared dependencies already installed:
+
+```sh
+R CMD INSTALL .
+```
+
+Package loading never installs or attaches third-party packages. The contributed
+runtime dependencies are `dplyr`, `Matrix`, `purrr`, `rlang`, `tsDyn`, `vars`, and
+`YieldCurve`, plus R's `splines` and `stats` packages. R >= 4.1.0 is required for
+native pipes. The dependency packages may impose additional R version requirements.
+Plotting, notebook, application, and test tools are declared separately in
+`Suggests`; install them explicitly when using those workflows.
+
+## Core entrypoints
+
+```r
+library(CrossCurveR)
+
+# Call with an aligned yield panel and the appropriate model controls:
+# dly_fit(...)
+# mc_fit_end(...)
+# mc_fit_exo(...)
+# mc_fit_shock_baseline(...)
+# mc_fit_shock_from_baseline(...)
+```
 
 TODO: add a small reproducible example covering aligned curve inputs,
 MCE and DLY fitting, diagnostics, and stress testing.
+
+## Development and tests
+
+From R in the checkout, explicitly install the declared development and test
+dependencies, including the supported `testthat` and `waldo` versions:
+
+```r
+remotes::install_deps(dependencies = TRUE)
+```
+
+Then install the current checkout before exercising its installed namespace:
+
+```sh
+R CMD INSTALL .
+Rscript --vanilla unit_tests/run_unit_tests.R
+```
+
+Core package tests live in `tests/testthat/` and also run under `R CMD check`.
+The repository runner additionally checks application helpers in `unit_tests/`.
+Tests include a separate R session with no default packages attached, running
+outside the repository. Test-specific locale changes are scoped to the run.
+
+Research notebooks load `CrossCurveR` and their analysis packages explicitly.
+Application helpers are sourced into the notebook's own environment.
+The package does not activate `renv`, change language settings, select a local
+Pandoc installation, or change the working directory at startup. The existing
+`renv.lock` remains available for an explicit `renv::restore()` when reproducing
+the archived research environment.
 
 ## Models and applications
 
@@ -31,13 +87,15 @@ MCE and DLY fitting, diagnostics, and stress testing.
 
 ## Citation
 
-Citation skeletons are provided in [CITATION.cff](CITATION.cff) for GitHub
-and [inst/CITATION](inst/CITATION) for R. Author details are placeholders;
-release citation and DOI information will be completed before publication.
+Citation metadata is provided in [CITATION.cff](CITATION.cff) for GitHub
+and [inst/CITATION](inst/CITATION) for R:
 
-## Development plan
+```r
+citation("CrossCurveR")
+```
 
-See [plan.md](plan.md) for the package and publication roadmap.
+The maintainer identity follows the existing Git author record. The publication
+author list and release DOI will be reviewed before publication.
 
 ## Licence
 

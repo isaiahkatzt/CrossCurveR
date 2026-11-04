@@ -4,7 +4,7 @@
 
 dly_phi <- function(lambda_optim, mats) {
   phi <- NS_loadings_ls(lambda_optim, mats)
-  cross_phi <- solve(tcrossprod(phi)) %*% phi
+  cross_phi <- Matrix::solve(Matrix::tcrossprod(phi)) %*% phi
   return(list(phi = phi, cross_phi = cross_phi))
 }
 
@@ -42,7 +42,7 @@ dly_all_sc <- function(lambdas, yields, mats, curves = names(yields)) {
     lambda_grid_search(lambdas, x, mats, loss = l2_loss_ls)
   }, numeric(1))
 
-  curve_NSparam <- setNames(lapply(seq_along(yields), function(i) {
+  curve_NSparam <- stats::setNames(lapply(seq_along(yields), function(i) {
     dly_single_curve(curve_lambdas[[i]], yields[[i]], mats)
   }), curves)
 
@@ -54,7 +54,7 @@ dly_pull_beta <- function(dly_sclist, curves = names(dly_sclist)) {
     curves <- names(dly_sclist)
   }
 
-  setNames(lapply(curves, function(curve) {
+  stats::setNames(lapply(curves, function(curve) {
     dly_sclist[[curve]]$betas$NSbetas
   }), curves)
 }
@@ -131,11 +131,11 @@ dly_country_factor_model <- function(country_factor, global_factor) {
   rownames(fitted_factor) <- rownames(country_factor)
   rownames(residual_factor) <- rownames(country_factor)
 
-  total_ss <- colSums((country_factor - matrix(colMeans(country_factor),
+  total_ss <- Matrix::colSums((country_factor - matrix(colMeans(country_factor),
                                                nrow = nrow(country_factor),
                                                ncol = ncol(country_factor),
                                                byrow = TRUE))^2)
-  resid_ss <- colSums(residual_factor^2)
+  resid_ss <- Matrix::colSums(residual_factor^2)
   r_squared <- 1 - resid_ss / total_ss
   r_squared[!is.finite(r_squared)] <- NA_real_
 
@@ -149,7 +149,7 @@ dly_country_factor_model <- function(country_factor, global_factor) {
 }
 
 dly_bind_betas <- function(level_factor, slope_factor, curves = colnames(level_factor)) {
-  setNames(lapply(curves, function(curve) {
+  stats::setNames(lapply(curves, function(curve) {
     out <- cbind(
       L = level_factor[, curve],
       S = slope_factor[, curve]
@@ -160,7 +160,7 @@ dly_bind_betas <- function(level_factor, slope_factor, curves = colnames(level_f
 }
 
 dly_curve_yields <- function(sc_full, level_factor, slope_factor, curves = names(sc_full)) {
-  setNames(lapply(curves, function(curve) {
+  stats::setNames(lapply(curves, function(curve) {
     factor_mat <- cbind(
       level_factor[, curve],
       slope_factor[, curve]
@@ -173,7 +173,7 @@ dly_curve_yields <- function(sc_full, level_factor, slope_factor, curves = names
 }
 
 dly_curve_residuals <- function(actual_yields, fitted_yields, curves = names(actual_yields)) {
-  setNames(lapply(curves, function(curve) {
+  stats::setNames(lapply(curves, function(curve) {
     as.matrix(actual_yields[[curve]][, -1, drop = FALSE]) -
       as.matrix(fitted_yields[[curve]][, -1, drop = FALSE])
   }), curves)
@@ -312,7 +312,7 @@ dly_fit_var1_block <- function(state_matrix) {
 
   intercept <- as.numeric(coef_mat["Intercept", ])
   names(intercept) <- colnames(response)
-  phi <- t(coef_mat[colnames(lag_state), , drop = FALSE])
+  phi <- Matrix::t(coef_mat[colnames(lag_state), , drop = FALSE])
   colnames(phi) <- colnames(lag_state)
   rownames(phi) <- colnames(response)
 
@@ -366,8 +366,8 @@ dly_fit_country_dynamic_block <- function(residual_matrix, global_matrix) {
 
   intercept <- as.numeric(coef_mat["Intercept", ])
   names(intercept) <- colnames(response)
-  phi <- t(coef_mat[paste0(colnames(residual_matrix), "_lag"), , drop = FALSE])
-  kappa <- t(coef_mat[paste0("g", colnames(global_matrix), "_lag"), , drop = FALSE])
+  phi <- Matrix::t(coef_mat[paste0(colnames(residual_matrix), "_lag"), , drop = FALSE])
+  kappa <- Matrix::t(coef_mat[paste0("g", colnames(global_matrix), "_lag"), , drop = FALSE])
   colnames(phi) <- colnames(residual_matrix)
   rownames(phi) <- colnames(response)
   colnames(kappa) <- colnames(global_matrix)
@@ -399,10 +399,10 @@ dly_transition_country_residual <- function(prev_residual, prev_global, intercep
 
 dly_country_global_factors <- function(level_global_factor, slope_global_factor, factor_models,
                                        curves) {
-  level_intercept <- setNames(as.numeric(factor_models$level$intercept[curves]), curves)
-  level_loading <- setNames(as.numeric(factor_models$level$loading[curves]), curves)
-  slope_intercept <- setNames(as.numeric(factor_models$slope$intercept[curves]), curves)
-  slope_loading <- setNames(as.numeric(factor_models$slope$loading[curves]), curves)
+  level_intercept <- stats::setNames(as.numeric(factor_models$level$intercept[curves]), curves)
+  level_loading <- stats::setNames(as.numeric(factor_models$level$loading[curves]), curves)
+  slope_intercept <- stats::setNames(as.numeric(factor_models$slope$intercept[curves]), curves)
+  slope_loading <- stats::setNames(as.numeric(factor_models$slope$loading[curves]), curves)
 
   level_factor <- outer(as.numeric(level_global_factor), level_loading)
   slope_factor <- outer(as.numeric(slope_global_factor), slope_loading)
@@ -428,7 +428,7 @@ dly_country_global_factors <- function(level_global_factor, slope_global_factor,
 
 dly_propagate_residual_states <- function(residual_models, actual_residuals, global_path,
                                           curves) {
-  setNames(lapply(curves, function(curve) {
+  stats::setNames(lapply(curves, function(curve) {
     model <- residual_models[[curve]]
     actual_state <- as.matrix(actual_residuals[[curve]])
     propagated_state <- actual_state
@@ -471,7 +471,7 @@ dly_dynamic_fit_from_static <- function(static_fit, actual_yields = NULL) {
     static_fit$global_factors$slope$factor,
     row_template = row_template
   )
-  actual_residual <- setNames(lapply(curves, function(curve) {
+  actual_residual <- stats::setNames(lapply(curves, function(curve) {
     dly_state_matrix(
       static_fit$factor_models$level$residual[, curve],
       static_fit$factor_models$slope$residual[, curve],
@@ -480,7 +480,7 @@ dly_dynamic_fit_from_static <- function(static_fit, actual_yields = NULL) {
   }), curves)
 
   global_transition <- dly_fit_var1_block(actual_global)
-  residual_transition <- setNames(lapply(curves, function(curve) {
+  residual_transition <- stats::setNames(lapply(curves, function(curve) {
     dly_fit_country_dynamic_block(actual_residual[[curve]], actual_global)
   }), curves)
 
@@ -538,7 +538,7 @@ dly_dynamic_fit_from_static <- function(static_fit, actual_yields = NULL) {
       global_transition,
       list(actual = actual_global, propagated = propagated_global)
     ),
-    residual = setNames(lapply(curves, function(curve) {
+    residual = stats::setNames(lapply(curves, function(curve) {
       c(
         residual_transition[[curve]],
         list(actual = actual_residual[[curve]], propagated = propagated_residual[[curve]])

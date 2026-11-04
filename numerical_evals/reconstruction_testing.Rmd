@@ -7,11 +7,9 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
+library(CrossCurveR)
 library(microbenchmark)
 
-source("data_formatting/dr_formatting.R")
-source("core_formatting.R")
-source("yield_estimation/bl_single_curve.R")
 
 ```
 
@@ -44,15 +42,13 @@ init_date <- "2000-01-01"
 end_date <- "2000-01-30"
 
 ## date range selection 
-date_seq <- seq.Date(ymd(start_date), ymd(end_date), by = "day")
+date_seq <- seq.Date(lubridate::ymd(start_date), lubridate::ymd(end_date), by = "day")
 weekday_seq <- date_seq[weekdays(date_seq) %in% c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday")]
 
 asdf <- dr_daily(data=tmp, reference=weekday_seq, threshold = 8)
 ```
 
 ```{r} 
-source("data_formatting/dr_formatting.R")
-source("core_formatting.R")
 
 j <- dr_build_curve(asdf, c(1,2,3,6,9,12,24,60,72,84,120,240,360), build="spline", spline_method="natural")
 j
@@ -67,7 +63,6 @@ as <- bl_NSbetas(jkl[1:20,], lo, ph$cross_phi, fmats)
 ```
 
 ```{r}
-source("yield_estimation/bl_single_curve.R")
 
 lambdas <- seq(from=0.001, to = 1, length.out=100)
 fit_check <- sc_fit(jkl[1:20,], fmats, type="nelson" )

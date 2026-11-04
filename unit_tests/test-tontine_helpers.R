@@ -1,4 +1,3 @@
-source_project_file(file.path(repo_root, "applications/tontine_helpers.R"))
 
 make_ladder_yields <- function() {
   dates <- as.Date(c(

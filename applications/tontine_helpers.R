@@ -2,30 +2,6 @@
 #          Tontine Application Helpers      #
 #############################################
 
-tontine_project_files <- function() {
-  c(
-    "core_formatting.R",
-    "yield_estimation/curve_reformat.R",
-    "yield_estimation/matrix_helpers.R",
-    "yield_estimation/cr_core_estim.R",
-    "yield_estimation/cr_eval.R",
-    "yield_estimation/bl_single_curve.R",
-    "yield_estimation/dly_mcm.R",
-    "yield_estimation/bl_feature_extract.R",
-    "yield_estimation/bl_normalize.R",
-    "yield_estimation/bl_cross_estimation.R",
-    "stress_testing/st_build_shock.R",
-    "stress_testing/st_fit_shock.R"
-  )
-}
-
-tontine_source_project <- function(root = here::here(), envir = .GlobalEnv,
-                                   files = tontine_project_files()) {
-  invisible(lapply(files, function(path) {
-    sys.source(file.path(root, path), envir = envir)
-  }))
-}
-
 tontine_mat_names <- function(mats) {
   paste0("X", unname(vapply(mats, numeric_to_matname, character(1))))
 }

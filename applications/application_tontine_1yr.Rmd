@@ -17,19 +17,16 @@ proceeds, mortality redistribution, and deferred withdrawal penalties are fully
 reinvested into surviving members' next-rung positions.
 
 ```{r libraries}
+library(CrossCurveR)
 library(here)
 library(dplyr)
 library(purrr)
 library(ggplot2)
 library(scales)
 library(tibble)
-library(vars)
-library(tsDyn)
-library(Matrix)
 
-sys.source(here::here("applications", "tontine_helpers.R"), envir = .GlobalEnv)
-sys.source(here::here("applications", "tontine_setup.R"), envir = .GlobalEnv)
-tontine_source_project()
+source(here::here("applications", "tontine_helpers.R"), local = TRUE)
+source(here::here("applications", "tontine_setup.R"), local = TRUE)
 ```
 
 ```{r configuration}

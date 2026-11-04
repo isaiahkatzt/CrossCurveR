@@ -8,22 +8,8 @@ output: html_document
 library(here)
 library(dplyr)
 library(purrr)
-library(vars)
-library(tsDyn)
 
-load_baseline_helpers <- function() {
-  project_files <- c(
-    "core_formatting.R",
-    "yield_estimation/bl_single_curve.R",
-    "yield_estimation/bl_feature_extract.R"
-  )
-
-  invisible(lapply(project_files, function(path) {
-    sys.source(here::here(path), envir = .GlobalEnv)
-  }))
-}
-
-load_baseline_helpers()
+library(CrossCurveR)
 
 raw_yields <- list(
   usa_r <- "usa-full.csv", 

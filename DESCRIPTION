@@ -1,12 +1,41 @@
 Package: CrossCurveR
 Title: Multi-Curve Yield Modelling and Stress Testing
 Version: 0.0.0.9000
-Authors@R: person(given = "TODO", family = "Author", role = c("aut", "cre"))
+Authors@R: person("Izzy", email = "isaiahkatz2020@u.northwestern.edu",
+    role = c("aut", "cre"))
 Description: Tools for estimating, examining, and stress-testing multiple
     yield curves using Diebold-Li-Yue (DLY) models and covariance-regression-based
     multi-curve estimation (MCE), with supporting curve reconstruction and
     actuarial applications.
 License: GPL-3
 Encoding: UTF-8
+Depends:
+    R (>= 4.1.0)
+Imports:
+    dplyr (>= 1.0.0),
+    Matrix,
+    purrr,
+    rlang,
+    splines,
+    stats,
+    tsDyn,
+    vars,
+    YieldCurve
+Suggests:
+    ggplot2,
+    here,
+    knitr,
+    lubridate,
+    microbenchmark,
+    patchwork,
+    psych,
+    rmarkdown,
+    scales,
+    testthat (>= 3.2.0),
+    tibble,
+    tidyr,
+    waldo (>= 0.6.2),
+    withr
+Config/testthat/edition: 3
 URL: https://github.com/isaiahkatzt/CrossCurveR
 BugReports: https://github.com/isaiahkatzt/CrossCurveR/issues

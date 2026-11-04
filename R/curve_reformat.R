@@ -3,24 +3,24 @@
 #############################################
 
 full_matrix_yield <- function(yields, curves) {
-  setNames(lapply(yields, function(yield) {
+  stats::setNames(lapply(yields, function(yield) {
     as.matrix(yield[-1])}
     ), curves)
 }
 
 vecY <- function(yields, curves, mats, ts=TRUE) {
-  ## embed yield matrix Y as MD-dimensional vector 
+  ## embed yield matrix Y as MD-dimensional vector
   mat_str <- sapply(mats, numeric_to_matname)
-  mds <- as.vector(t(outer(curves, mat_str, paste, sep='.')))
-  
+  mds <- as.vector(Matrix::t(outer(curves, mat_str, paste, sep='.')))
+
   if (!ts) {
     Y_tilde <- do.call(cbind, yields)
-    colnames(Y_tilde) <- mds 
+    colnames(Y_tilde) <- mds
     return(list(tY=Y_tilde))
   }
   else {
     Y_tilde <- do.call(cbind, c(yields[1], lapply(yields[-1], function(y) y[, -1, drop = FALSE])))
-    colnames(Y_tilde) <- c("time", mds) 
+    colnames(Y_tilde) <- c("time", mds)
     return(list(tY=Y_tilde[,-1], time=Y_tilde[,1]))
   }
 }
@@ -30,10 +30,10 @@ vecY <- function(yields, curves, mats, ts=TRUE) {
 #############################################
 
 PY_full <- function(vecY, P) {
-  ## yields x permutation matrix 
-  vm_Y <- as.matrix(vecY) 
+  ## yields x permutation matrix
+  vm_Y <- as.matrix(vecY)
   permuted_colnames <- colnames(vecY)[apply(P, 1, which.max)]
-  PYt <- vm_Y %*% t(P)
+  PYt <- vm_Y %*% Matrix::t(P)
   PY <- data.frame(as.matrix(PYt))
   colnames(PY) <- permuted_colnames
   return(list(py = PY, cn = permuted_colnames))
@@ -42,26 +42,26 @@ PY_full <- function(vecY, P) {
 cf_curve_cut <- function(vecY, curves, mats) {
   M <- length(mats)
   D <- length(curves)
-  
+
   cut_points <- rep(seq_len(D), each = M)
-  
+
   cut_curve <- split(seq_len(ncol(vecY)), cut_points)
   cut_curve <- lapply(cut_curve, function(j) vecY[, j, drop = FALSE])
-  
+
   names(cut_curve) <- curves
-  return(cut_curve) 
+  return(cut_curve)
 }
 
 cf_phi_cut <- function(vphi, curves, mats) {
-  M <- length(mats) 
-  D <- length(curves) 
-  
-  cut_points <- rep(seq_len(D), each = M) 
-  
+  M <- length(mats)
+  D <- length(curves)
+
+  cut_points <- rep(seq_len(D), each = M)
+
   cut_phi <- lapply(seq_len(D), function(j) {
     lapply(vphi, function(cuts) cuts[cut_points == j, , drop = FALSE] )
-  }) 
-  
+  })
+
   names(cut_phi) <- curves
-  return(cut_phi) 
+  return(cut_phi)
 }

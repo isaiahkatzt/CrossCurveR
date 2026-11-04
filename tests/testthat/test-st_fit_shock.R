@@ -23,7 +23,7 @@ make_fake_shock_baseline <- function() {
         cc_ecm = list(gbr = list(rank = 1, Gmatrix = matrix(1, nrow = 1, ncol = 1)))
       )
     ),
-    BS0 = list(X01M = list(S0 = diag(2), B = matrix(1, nrow = 2, ncol = 1))),
+    BS0 = list(X01M = list(S0 = Matrix::diag(2), B = matrix(1, nrow = 2, ncol = 1))),
     baseline_fit = list(
       tenor = data.frame(time = fixture_time, value = seq_along(fixture_time)),
       curve = data.frame(time = fixture_time, value = seq_along(fixture_time))
@@ -170,18 +170,21 @@ test_that("st_build_xt_state can fall back to baseline ECM when a refit yields n
         )
       }
     ),
-    expect_warning(
-      st_build_xt_state(
-        bl_yields = list(),
-        curves = fixture_curves,
-        reference = "usa",
-        reuse_ECM = FALSE,
-        baseline_ecm = baseline_ecm,
-        ECM_fallback = "baseline",
-        ytime = fixture_time
-      ),
-      "falling back to baseline ECM"
-    )
+    {
+      expect_warning(
+        fallback_result <- st_build_xt_state(
+          bl_yields = list(),
+          curves = fixture_curves,
+          reference = "usa",
+          reuse_ECM = FALSE,
+          baseline_ecm = baseline_ecm,
+          ECM_fallback = "baseline",
+          ytime = fixture_time
+        ),
+        "falling back to baseline ECM"
+      )
+      fallback_result
+    }
   )
 
   expect_equal(captured_ecm, baseline_ecm)

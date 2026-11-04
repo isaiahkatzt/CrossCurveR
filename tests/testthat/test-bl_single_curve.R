@@ -24,8 +24,8 @@ test_that("phi builders produce valid cross-sectional inverses", {
 
   expect_equal(dim(phi_obj$phi), c(3, length(fixture_mats)))
   expect_equal(dim(sven_obj$phi), c(4, length(fixture_mats)))
-  expect_equal(unname(phi_obj$cross_phi %*% t(phi_obj$phi)), diag(3), tolerance = 1e-5)
-  expect_equal(unname(sven_obj$cross_phi %*% t(sven_obj$phi)), diag(4), tolerance = 1e-5)
+  expect_equal(unname(phi_obj$cross_phi %*% Matrix::t(phi_obj$phi)), Matrix::diag(3), tolerance = 1e-5)
+  expect_equal(unname(sven_obj$cross_phi %*% Matrix::t(sven_obj$phi)), Matrix::diag(4), tolerance = 1e-5)
 })
 
 test_that("NS beta extraction and fit reconstruction recover exact NS yields", {

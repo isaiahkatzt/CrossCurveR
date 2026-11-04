@@ -7,26 +7,11 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
-load_crosscurveR <- function() {
-  project_files <- c(
-    "packages.R",
-    "core_formatting.R",
-    "yield_estimation/curve_reformat.R",
-    "yield_estimation/matrix_helpers.R",
-    "yield_estimation/cr_core_estim.R",
-    "yield_estimation/cr_eval.R",
-    "yield_estimation/bl_single_curve.R",
-    "yield_estimation/bl_feature_extract.R",
-    "yield_estimation/bl_normalize.R",
-    "yield_estimation/bl_cross_estimation.R"
-  )
-  
-  invisible(lapply(project_files, function(path) {
-    sys.source(here::here(path), envir = .GlobalEnv)
-  }))
-}
-
-load_crosscurveR()
+library(CrossCurveR)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(here)
 ```
 
 ```{r}
