@@ -51,6 +51,24 @@ library(CrossCurveR)
 TODO: add a small reproducible example covering aligned curve inputs,
 MCE and DLY fitting, diagnostics, and stress testing.
 
+## Yield data input
+
+Read labelled CSV panels through the validated reader:
+
+```r
+yields <- dr_read_yields("curve.csv")
+rebuilt <- dr_build_curve(yields, nmats = c(1, 3, 6, 12, 24, 60))
+```
+
+Reads retain the downstream `X01M`, `X01Y` naming convention. The reader accepts
+prefixed or unprefixed M/Y labels, normalizes aliases such as `12M` to `X01Y`,
+and rejects unknown or duplicate tenors. `dr_build_curve()` accepts either style
+and keeps its existing unprefixed output names. Date and yield values are preserved.
+
+For an existing data frame, use `dr_normalize_maturity_names()`. For raw files
+with arbitrary rate-column headers, retain the original CSV names with
+`check.names = FALSE` and map columns explicitly through `dr_yield_format(mats = ...)`.
+
 ## Development and tests
 
 From R in the checkout, explicitly install the declared development and test

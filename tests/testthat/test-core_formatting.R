@@ -12,6 +12,14 @@ test_that("matname_to_numeric parses tenor strings into years", {
   expect_equal(matname_to_numeric("10Y"), 10)
 })
 
+test_that("maturity parsing supports CSV prefixes and fractional year labels", {
+  labels <- c("X01M", "12M", "X01.5Y")
+  expect_equal(vapply(labels, matname_to_numeric, numeric(1), USE.NAMES = FALSE),
+               c(1 / 12, 1, 1.5))
+  expect_equal(12 * matname_to_numeric(numeric_to_matname(13)), 13,
+               tolerance = 1e-12)
+})
+
 test_that("Nelson-Siegel loading helpers return expected dimensions and values", {
   lambda <- 0.5
   mats_local <- c(1, 3, 6)

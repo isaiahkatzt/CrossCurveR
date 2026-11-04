@@ -34,7 +34,7 @@ cutoffs <- c(4, 8)
 ref = "usa"
 
 yields <- lapply(curve_files, function(file_name) {
-  read.csv(here::here("reconstructed_data", file_name), stringsAsFactors = FALSE)
+  dr_read_yields(here::here("reconstructed_data", file_name))
 })
 
 yields <- lapply(yields, function(curve_df) {

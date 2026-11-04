@@ -33,7 +33,7 @@ lambdas <- seq(0.01, 0.15, by = 0.005)
 cutoffs <- c(4, 8)
 
 yields <- lapply(curve_files, function(file_name) {
-  read.csv(here::here("reconstructed_data", file_name), stringsAsFactors = FALSE)
+  dr_read_yields(here::here("reconstructed_data", file_name))
 })
 
 yields <- lapply(yields, function(curve_df) {

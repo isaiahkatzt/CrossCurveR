@@ -27,7 +27,7 @@ curve_files <- list(
 )
 
 yields <- lapply(curve_files, function(x) {
-  read.csv(here("reconstructed_data", x), stringsAsFactors = FALSE)
+  dr_read_yields(here("reconstructed_data", x))
 })
 
 yields <- lapply(yields, function(x) {

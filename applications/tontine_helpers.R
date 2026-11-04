@@ -13,7 +13,7 @@ tontine_read_yields <- function(curve_files, data_dir = here::here("reconstructe
   }
 
   yields <- lapply(curve_files, function(file_name) {
-    utils::read.csv(file.path(data_dir, file_name), stringsAsFactors = FALSE)
+    dr_read_yields(file.path(data_dir, file_name))
   })
 
   setNames(lapply(yields, function(curve_df) {

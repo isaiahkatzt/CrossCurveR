@@ -20,7 +20,8 @@ Imports:
     stats,
     tsDyn,
     vars,
-    YieldCurve
+    YieldCurve,
+    utils
 Suggests:
     ggplot2,
     here,

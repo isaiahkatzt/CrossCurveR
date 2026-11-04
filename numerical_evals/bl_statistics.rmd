@@ -36,7 +36,7 @@ curve_files <- list(
 curves = c("usa", "gbr", "jpn", "cad", "ger", "fra", "itl", "aus")
 
 yields <- lapply(curve_files, function(x) {
-  read.csv(here("reconstructed_data", x), stringsAsFactors = FALSE)
+  dr_read_yields(here("reconstructed_data", x))
 })
 
 yields <- lapply(yields, function(x) {
@@ -47,7 +47,7 @@ yields <- lapply(yields, function(x) {
 
 ```{r}
 raw_curves <- lapply(raw_yields, function(x) {
-  read.csv(here("reconstructed_data", x), stringsAsFactors = FALSE)
+  dr_read_yields(here("reconstructed_data", x))
 })
 
 raw_curves <- lapply(raw_curves, function(x) {

@@ -17,6 +17,18 @@ make_ladder_yields <- function() {
   )
 }
 
+test_that("CSV reads preserve valuation panel names and rate lookups", {
+  folder <- tempfile("curve-data-")
+  dir.create(folder)
+  withr::defer(unlink(folder, recursive = TRUE))
+  expected <- make_ladder_yields()$usa
+  utils::write.csv(expected, file.path(folder, "usa.csv"), row.names = FALSE)
+
+  yields <- tontine_read_yields(list(usa = "usa.csv"), data_dir = folder)
+  expect_equal(yields$usa, expected)
+  expect_equal(tontine_extract_curve_rate(yields$usa, expected$time[1], "X01Y"), 2)
+})
+
 test_that("tontine_build_bond_ladder_schedule uses observed year-start dates and survival probabilities", {
   schedule <- tontine_build_bond_ladder_schedule(
     yields = make_ladder_yields(),

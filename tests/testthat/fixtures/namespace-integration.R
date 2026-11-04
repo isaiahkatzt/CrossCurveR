@@ -59,5 +59,6 @@ local({
   )
   stopifnot(identical(formatted$time, c("2020-01-02", "2020-01-03")),
             is.na(formatted[[2]][1]))
-  cat("Namespace smoke test passed\n")
+
+  cat("Namespace integration check passed\n")
 })

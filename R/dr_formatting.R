@@ -36,14 +36,11 @@ dr_normalize_timestamp <- function(ts, tz = "UTC") {
 }
 
 .validate_input_data <- function(data= "", mats = c()) {
-
   time <- dr_normalize_timestamp(data[, 1])
-
-  if (!(length(data[, -1]) == length(mats))){
+  if (ncol(data) - 1L != length(mats)) {
     stop("input data columns must match input maturities")
   }
-
-  return(time)
+  time
 }
 
 dr_yield_format <- function(data = "", mats = c(), start_date = "", end_date = "") {
@@ -122,7 +119,9 @@ dr_build_curve <- function(data, nmats=NULL, tkey="time", build=c("spline", "log
                            complete = FALSE,
                            precision = 4) {
 
-  mats <- sapply(colnames(data)[-1], matname_to_numeric, USE.NAMES=FALSE) * 12
+  data <- dr_normalize_maturity_names(data, tkey = tkey)
+  names(data)[-1] <- sub("^X", "", names(data)[-1])
+  mats <- vapply(names(data)[-1], .matname_to_months, numeric(1), USE.NAMES = FALSE)
   dmats <- setdiff(nmats, mats)
   build = match.arg(build)
 
