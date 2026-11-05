@@ -2,6 +2,20 @@
 #     Covariance Regression Algorithms      #
 #############################################
 
+.cr_validate_iteration_controls <- function(max_iter, tol, check_every) {
+  counts <- list(max_iter = max_iter, check_every = check_every)
+  for (name in names(counts)) {
+    value <- counts[[name]]
+    if (!(is.double(value) || is.integer(value)) || length(value) != 1L ||
+        !is.finite(value) || value < 1 || value != floor(value)) {
+      stop(sprintf("`%s` must be a finite positive integer (at least 1).", name), call. = FALSE)
+    }
+  }
+  if (!(is.double(tol) || is.integer(tol)) || length(tol) != 1L || !is.finite(tol) || tol <= 0) {
+    stop("`tol` must be a finite positive numeric scalar.", call. = FALSE)
+  }
+}
+
 zero_mean_covreg <- function(W, X, init = c("adaptive", "static"), max_iter = 1000, tol = 1e-10, S0 = NULL, B = NULL,
                              S0_shrink_diag = 0, verb = FALSE, term = FALSE) {
   init <- match.arg(init)
@@ -81,6 +95,7 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
                                   check_every = 1, use_loglik = TRUE, verbose = FALSE,
                                   store_path = TRUE) {
   init <- match.arg(init)
+  .cr_validate_iteration_controls(max_iter, tol, check_every)
 
   W <- as.matrix(W)
   X <- as.matrix(X)

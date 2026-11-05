@@ -10,5 +10,6 @@
 - Resolve `zero_mean_covreg()` initialization choices so the default uses adaptive initialization.
 - Apply the covariance ridge once so regularized E-steps and likelihoods use the returned covariance.
 - Handle scalar covariance square roots, reject material asymmetry or negative eigenvalues, and require numerically invertible covariances for whitening.
+- Reject invalid iteration counts, checking intervals, and convergence tolerances before regularized covariance fitting.
 
 <!-- TODO: record changes here as each implementation step is completed. -->

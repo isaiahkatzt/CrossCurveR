@@ -74,3 +74,31 @@ test_that("regularized estimators use the stored covariance in E-steps and likel
     expect_equal(fit$loglik, direct_loglik, tolerance = 1e-12)
   }
 })
+
+test_that("regularized estimators reject invalid iteration controls before fitting", {
+  invalid <- list(
+    max_iter = list(0, -1, 1.5, Inf, NA_real_, numeric(0), c(1, 2), "1"),
+    check_every = list(0, -1, 1.5, Inf, NA_real_),
+    tol = list(0, -1, Inf, NA_real_)
+  )
+  for (estimator in list(zero_mean_covreg_em, covreg_comp_estimator)) {
+    for (control in names(invalid)) {
+      for (value in invalid[[control]]) {
+        args <- c(list(W = NULL, X = NULL), stats::setNames(list(value), control))
+        expect_error(do.call(estimator, args), paste0("`", control, "` must be"))
+      }
+    }
+  }
+})
+
+test_that("one iteration remains valid without an intervening convergence check", {
+  W <- matrix(c(-1, .2, .5, -.4, 1.2, .8, -.3, 1.1, .7, -.6), ncol = 2, byrow = TRUE)
+  X <- cbind(1, seq(-1, 1, length.out = nrow(W)))
+  for (estimator in list(zero_mean_covreg_em, covreg_comp_estimator)) {
+    fit <- estimator(W, X, B = matrix(0, 2, 2), S0 = diag(2), max_iter = 1L,
+                     check_every = 2L, tol = 1e-8, store_path = FALSE)
+    expect_equal(fit$iter, 1)
+    expect_false(fit$converged)
+    expect_true(all(is.finite(c(fit$mz, fit$vz, fit$loglik))))
+  }
+})

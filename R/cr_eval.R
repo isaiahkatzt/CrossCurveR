@@ -7,6 +7,7 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
     check_every = 1, use_loglik = TRUE, verbose = FALSE, store_path = TRUE) {
 
   init <- match.arg(init)
+  .cr_validate_iteration_controls(max_iter, tol, check_every)
 
   W <- as.matrix(W)
   X <- as.matrix(X)
