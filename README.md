@@ -9,7 +9,7 @@ multi-curve estimation (MCE).
 Package development is in progress on the `crosscurveR-package` branch.
 Reusable code now lives in `R/` and loads through the package namespace.
 API documentation, numerical validation, and publication examples remain
-work in progress; see [plan.md](plan.md).
+work in progress.
 
 ## Installation
 
@@ -90,9 +90,9 @@ The repository runner additionally checks application helpers in `unit_tests/`.
 Tests include a separate R session with no default packages attached, running
 outside the repository. Test-specific locale changes are scoped to the run.
 
-Refactors also require before/after application comparisons. Standalone validation
-scripts, saved references, and reports remain local. See the working requirements
-and verification gates in [plan.md](plan.md) for acceptance criteria and scope.
+Refactors also require before/after application comparisons and reviews of code
+size and organization. Standalone validation scripts, saved references, and
+reports remain local.
 
 Research notebooks load `CrossCurveR` and their analysis packages explicitly.
 Application helpers are sourced into the notebook's own environment.
