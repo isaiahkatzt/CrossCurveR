@@ -179,14 +179,13 @@ sigma_jt_optim <- function(BS0j, x) {
   B <- BS0j$B
   S0 <- BS0j$S0
   Bx <- B %*% x
-  Sigma <- S0 + Matrix::tcrossprod(Bx)
+  Sigma <- .cr_covariance(S0, Bx)
   return(Sigma)
 }
 
 jSigma_optim <- function(BS0j, X) {
   # compute full period sigma_{jt}
   N <- nrow(X)
-  day_list <- vector("list", N)
 
   jSigma <- lapply(seq_len(N), function(i) {
     sigma_jt_optim(BS0j = BS0j, x = X[i, ])

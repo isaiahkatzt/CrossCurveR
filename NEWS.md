@@ -11,5 +11,9 @@
 - Apply the covariance ridge once so regularized E-steps and likelihoods use the returned covariance.
 - Handle scalar covariance square roots, reject material asymmetry or negative eigenvalues, and require numerically invertible covariances for whitening.
 - Reject invalid iteration counts, checking intervals, and convergence tolerances before regularized covariance fitting.
+- Move the production EM estimator into the core covariance-estimation module without changing its implementation or interface.
+- Establish functionality, code-quality, and organization review gates with local before/after application comparisons.
+- Share inversion, diagonal shrinkage, covariance regularization, and likelihood helpers within the estimator module while preserving estimator-specific algorithms.
+- Share the covariance formula across reconstruction and simulation while preserving output shapes, tenor ordering, and simulation draws.
 
 <!-- TODO: record changes here as each implementation step is completed. -->

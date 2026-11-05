@@ -90,6 +90,10 @@ The repository runner additionally checks application helpers in `unit_tests/`.
 Tests include a separate R session with no default packages attached, running
 outside the repository. Test-specific locale changes are scoped to the run.
 
+Refactors also require before/after application comparisons. Standalone validation
+scripts, saved references, and reports remain local. See the working requirements
+and verification gates in [plan.md](plan.md) for acceptance criteria and scope.
+
 Research notebooks load `CrossCurveR` and their analysis packages explicitly.
 Application helpers are sourced into the notebook's own environment.
 The package does not activate `renv`, change language settings, select a local

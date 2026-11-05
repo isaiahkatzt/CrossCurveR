@@ -137,6 +137,29 @@ test_that("feature-extraction wrappers and sigma optimizers return structured ou
   expect_equal(length(sigma_time$tSigma), nrow(Xt))
 })
 
+test_that("covariance builders preserve values, ordering, and singleton outputs", {
+  object <- list(B = diag(2), S0 = diag(c(2, 3)))
+  X <- rbind(c(1, 2), c(3, 4))
+  expected <- array(c(3, 2, 2, 7, 11, 12, 12, 19), c(2, 2, 2))
+  expect_equal(cr_build(object, X), expected)
+  expect_equal(jSigma_optim(object, X), list(expected[, , 1], expected[, , 2]))
+  for (as_array in c(TRUE, FALSE)) for (drop in c(TRUE, FALSE)) {
+    singleton <- cr_build(object, X[1, , drop = FALSE], return_array = as_array, drop_single = drop)
+    if (!as_array && !drop) singleton <- singleton[[1]]
+    expect_equal(singleton, expected[, , 1, drop = FALSE])
+  }
+  simulated <- cr_synthetic(N = 2, B = object$B, S0 = object$S0, X = X, seed = 1)
+  expect_equal(simulated$Sigma_true, expected)
+
+  assembled <- tSigma_optim(list(X02Y = object,
+    X01Y = list(B = matrix(0, 2, 2), S0 = diag(c(5, 6)))), X)
+  expected_block <- diag(c(3, 7, 5, 6))
+  expected_block[1, 2] <- expected_block[2, 1] <- 2
+  expect_named(assembled$jSigma, c("X02Y", "X01Y"))
+  expect_s4_class(assembled$tSigma[[1]], "sparseMatrix")
+  expect_equal(as.matrix(assembled$tSigma[[1]]), expected_block)
+})
+
 test_that("time smoothers build knot points, spline bases, and rolling averages", {
   knot_points <- fe_kp_quantile(fixture_time, knot_count = 3)
   ns_basis <- fe_spline_basis("ns")

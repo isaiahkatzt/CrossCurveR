@@ -1,5 +1,30 @@
 # CrossCurveR: package and publication readiness assessment
 
+## Working requirements and verification gates
+
+These requirements govern each subsequent change on `crosscurveR-package`.
+
+- **Preserve functionality and application results.** Refactors must retain supported entrypoints, defaults, return structures, naming/order, estimator variants, and reuse/refit behavior. Numerical outputs must be identical or near-identical under the same data, seeds, settings, and software environment. Methodological changes require separate agreement.
+- **Verify every implementation change.** Install the candidate package, run the existing package/namespace and application-helper tests, and compare the affected application outputs against a reference captured before the change. Documentation-only changes require document/diff review.
+- **Keep the implementation lean.** Review the diff for duplicated logic, unnecessary wrappers, unused code, extra dependencies, and redundant tests. Retain focused tests of meaningful behavior and previously confirmed defects. Temporary validation artifacts stay outside package source.
+- **Keep responsibilities clear.** Estimators fit parameters; covariance builders construct covariance paths; fitting entrypoints coordinate whitening/projection/rescaling; applications express actuarial scenarios and valuations. Review dependency direction and public-interface compatibility before accepting a refactor.
+- **Proceed in small steps.** Obtain the user's sign-off before additional structural/organizational changes, as requested. Report verification results and remaining limits before the next step. Commit and push when requested.
+
+The verification pipeline for an implementation change is:
+
+1. **Capture the reference.** Install the currently accepted implementation into an isolated library and record application outputs before editing. Keep input hashes, configuration, convergence diagnostics, and session information with the reference. Preserve relevant local application settings.
+2. **Make one scoped change.** Keep algorithm/default changes separate from restructuring so differences can be attributed to a specific cause.
+3. **Install and test the candidate.** Run `R CMD INSTALL --library=<candidate-library> .`, then `Rscript --vanilla unit_tests/run_unit_tests.R` with that library first on `R_LIBS`. Resolve new failures or warnings.
+4. **Compare application behavior.** Re-execute the same application selection using the candidate package and compare it with the captured reference. The current repeatable subset covers 2015–2016, Observed/DNS/DLY/MCE baselines, the 2015 level shock, fitted valuation curves, return factors, wealth, and country bond profit/loss tables. Supplement it with affected fitting paths and other `applications/` workflows; rerun full affected notebooks for broader changes and before release. A subset pass does not verify unexecuted applications or scenarios.
+5. **Review code quality and structure.** Run `git diff --check` and inspect the diff for unnecessary additions, misplaced responsibilities, broken interfaces, and unintended edits. These are explicit review gates; numerical tests alone cannot establish them.
+6. **Record the outcome.** Report the reference used, workflows exercised, numerical comparison, test status, code/organization review, and any unverified scope. Accept the change only when all applicable gates pass.
+
+For the application comparison, data hashes, recorded configuration, and iteration/convergence diagnostics must match exactly. Numerical tables and fitted curves use `all.equal(..., tolerance = 1e-10, check.attributes = TRUE)` as a tight comparison threshold, not a blanket definition of actuarial significance. Preserve units and qualitative conclusions; investigate differences and agree any output-specific tolerance before changing the acceptance rule. Do not loosen tolerances or replace the reference merely to make a failing comparison pass.
+
+Application validation uses the installed package and the notebook's actual computational chunks. Preserve existing references when comparing candidates. Standalone validation scripts, reference snapshots, candidate results, and reports remain local and are excluded from commits and package archives. The computational subset does not render plots; inspect representative rendered outputs when presentation is affected.
+
+The assessment below records the initial findings; completed work is checked off as it is verified.
+
 ## 1. Current position
 
 **CrossCurveR has the computational foundation for a publishable R package. The main work is to establish a supported interface, strengthen numerical validation, and make the research reproducible outside your development environment.**
@@ -50,17 +75,19 @@ Keep `renv` for reproducing the paper’s environment. Package users should obta
 
 ### Fix confirmed defects before freezing a release
 
-| Finding | Required change |
-|---|---|
-| Reading a supplied CSV with ordinary `read.csv()` introduces `X` prefixes in maturity names. Passing that result to `dr_build_curve()` returned **all missing yields** in my probe. | Normalise maturity names at input and reject unrecognised names before reconstruction. See [reconstruction code](data_formatting/dr_formatting.R), line 120. |
-| `zero_mean_covreg()` fails with its default `init` because its two-element default reaches a scalar `if`. Existing tests supply `init` explicitly. | Apply `match.arg()` and test default calls. See [estimator code](yield_estimation/cr_core_estim.R), line 5. |
-| The regularised EM likelihood uses an additionally ridged inverse but a determinant without that additional ridge. An independent calculation disagreed with the reported likelihood. | Use one consistently defined covariance in estimation, likelihood evaluation, and diagnostics. See [likelihood calculation](yield_estimation/cr_eval.R), line 55. |
-| `symmPSD_sqrt(matrix(4, 1, 1))` fails; inverse square roots fail for singular matrices. All negative eigenvalues are currently clipped indiscriminately. | Handle scalar matrices; distinguish rounding error from materially invalid covariance matrices; document the singular-matrix policy. |
-| Zero iterations can produce an undefined-variable error in the EM estimator. | Validate iteration controls and return informative input errors. |
+Completed on `crosscurveR-package`:
+
+- [x] **Normalise maturity names before reconstruction.** Reject unrecognised or duplicate tenors and preserve downstream `X[TENOR]` names. ([9cf9b38](https://github.com/isaiahkatzt/CrossCurveR/commit/9cf9b38))
+- [x] **Fix default covariance-regression initialisation.** Apply `match.arg(init)` in `zero_mean_covreg()` and test the default against explicit adaptive initialisation. ([f2020f1](https://github.com/isaiahkatzt/CrossCurveR/commit/f2020f1))
+- [x] **Use a consistent regularised covariance in the E-step and likelihood.** Remove the extra ridge from inverses in both regularised estimators; verify independent likelihood calculations and comparable full tontine application results. ([aee15d9](https://github.com/isaiahkatzt/CrossCurveR/commit/aee15d9))
+- [x] **Correct covariance square roots and define the whitening policy.** Support scalar matrices, tolerate negligible asymmetry and negative eigenvalues, and reject material violations. Singular PSD square roots are allowed; whitening requires numerical invertibility. Positive eigenvalues remain unchanged. ([babd366](https://github.com/isaiahkatzt/CrossCurveR/commit/babd366))
+- [x] **Validate EM iteration controls.** Require positive whole-number iteration counts and checking intervals, and finite positive convergence tolerances, in the regularised EM estimator and comparator. Confirm informative errors and unchanged valid-input results across fitting paths and a tontine notebook subset. ([8d1289f](https://github.com/isaiahkatzt/CrossCurveR/commit/8d1289f))
 
 ### Consolidate implementations and research material
 
-- Move the production EM estimator out of the evaluation-labelled file.
+- [x] Move the production EM estimator from `R/cr_eval.R` into `R/cr_core_estim.R`, preserving its implementation and interface.
+- [x] Share private numerical helpers for inversion, diagonal shrinkage, covariance regularisation, and likelihood evaluation within `R/cr_core_estim.R`; preserve estimator-specific loops, defaults, and interfaces.
+- [x] Review tenor-fitting call paths and retain `blcc_fe()` in `R/bl_feature_extract.R`. Share the pointwise covariance calculation across reconstruction, tenor paths, and simulation while preserving output shapes, sparse assembly, tenor order, and random draws.
 - Retain one authoritative implementation for each deliberately supported estimator variant. The fixed-covariance comparator should be explicitly identified as such.
 - Remove unfinished placeholder functions from the supported release; preserve future work in issues or development branches.
 - Consolidate duplicated fitting and rescaling operations used by ordinary and shocked MCE fits.
