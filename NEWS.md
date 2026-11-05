@@ -9,5 +9,6 @@
 - Add `dr_read_yields()` for validated CSV input without automatic header repair.
 - Resolve `zero_mean_covreg()` initialization choices so the default uses adaptive initialization.
 - Apply the covariance ridge once so regularized E-steps and likelihoods use the returned covariance.
+- Handle scalar covariance square roots, reject material asymmetry or negative eigenvalues, and require numerically invertible covariances for whitening.
 
 <!-- TODO: record changes here as each implementation step is completed. -->
