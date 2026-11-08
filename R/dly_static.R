@@ -103,6 +103,13 @@ dly_curve_yields <- function(sc_full, level_factor, slope_factor, curves = names
 }
 
 dly_curve_residuals <- function(actual_yields, fitted_yields, curves = names(actual_yields)) {
+  fitted_yields <- .cc_named(fitted_yields, curves, "Fitted yields")
+  mats <- vapply(names(fitted_yields[[1]])[-1], .matname_to_months, numeric(1), USE.NAMES = FALSE)
+  fitted_yields <- .cc_yields(fitted_yields, mats, curves)
+  actual_yields <- .cc_yields(actual_yields, mats, curves)
+  if (!identical(.cc_index(actual_yields[[1]][[1]]), .cc_index(fitted_yields[[1]][[1]]))) {
+    stop("Observed and fitted yield observation indices must match.", call. = FALSE)
+  }
   stats::setNames(lapply(curves, function(curve) {
     as.matrix(actual_yields[[curve]][, -1, drop = FALSE]) -
       as.matrix(fitted_yields[[curve]][, -1, drop = FALSE])

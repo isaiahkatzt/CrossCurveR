@@ -21,30 +21,13 @@ st_extract_ns_factor <- function(bl_yields, curves) {
 }
 
 st_validate_yields_input <- function(yields, curves, reference) {
-  if (!is.character(curves) || length(curves) == 0 || anyNA(curves) || any(!nzchar(curves))) {
-    stop("`curves` must be a non-empty character vector.")
-  }
-
-  if (!is.list(yields) || length(yields) != length(curves)) {
-    stop("`yields` must be a list with the same length as `curves`.")
-  }
-
-  if (is.null(names(yields)) || anyNA(names(yields)) || any(!nzchar(names(yields)))) {
-    stop("`yields` must be a named list.")
-  }
-
-  if (!all(curves %in% names(yields))) {
-    stop("All `curves` must be present in the names of `yields`.")
-  }
-
-  if (!reference %in% curves) {
-    stop("`reference` must be one of the supplied `curves`.")
-  }
-
-  yields[curves]
+  yields <- .cc_named(yields, curves, "`yields`")
+  .cc_reference(reference, curves)
+  yields
 }
 
 st_prepare_single_curve_state <- function(yields, lambdas, cutoffs, curves, mats) {
+  yields <- .cc_yields(yields, mats, curves)
   ytime <- yields[[1]][[1]]
   single_curve <- .bl_prepare_single_curve_state(yields, lambdas, cutoffs, curves, mats)
 
@@ -59,7 +42,10 @@ st_prepare_single_curve_state <- function(yields, lambdas, cutoffs, curves, mats
     phi_hat = single_curve$phi_hat,
     W = single_curve$W,
     H = single_curve$H,
-    ns_factor = st_extract_ns_factor(single_curve$bl_yields, curves)
+    ns_factor = st_extract_ns_factor(single_curve$bl_yields, curves),
+    input_spec = .cc_input_spec(yields, mats, curves,
+      decay = list(selected = single_curve$lambdas, grid = lambdas,
+                   parameterization = "inverse months"))
   ))
 }
 
@@ -166,6 +152,11 @@ st_build_xt_state <- function(bl_yields, curves, reference, reuse_ECM = TRUE, ba
       henderson_k = henderson_k
     )
   }
+
+  xt_state$Xt <- .cc_features(xt_state$Xt, ytime)
+  xt_state$feature_spec <- .bl_feature_spec(
+    xt_state$cc_ci_features, X_normalize, X_trunc, Xt_smooth, smoother,
+    knot_count, k_count, k_pass, hp_lambda, henderson_k)
 
   xt_state
 }
@@ -719,6 +710,11 @@ st_dly_shock_from_fit_profile <- function(dly_fit_obj, shock_curves, shock_facto
 }
 
 st_align_Xt_to_baseline <- function(Xt_new, Xt_reference) {
+  Xt_new <- .cc_features(Xt_new)
+  Xt_reference <- .cc_features(Xt_reference)
+  if (nrow(Xt_new) != nrow(Xt_reference)) {
+    stop("Scenario and baseline Xt must have the same observation count.", call. = FALSE)
+  }
   if (ncol(Xt_new) != ncol(Xt_reference)) {
     stop(
       "Re-estimated Xt is incompatible with the reused baseline BS0. ",
@@ -743,6 +739,11 @@ st_align_Xt_to_baseline <- function(Xt_new, Xt_reference) {
 }
 
 st_finalize_shocked_fit <- function(yields, time, phi_hat, Xt, BS0, curves, mats, W) {
+  yields <- .cc_yields(yields, mats, curves)
+  if (!identical(.cc_index(time), .cc_index(yields[[1]][[1]]))) {
+    stop("Fit time index must match the yield observation index.", call. = FALSE)
+  }
+  Xt <- .cc_features(Xt, time)
   Y <- vecY(yields, curves, mats)
   P <- bln_build_P(curves, mats)
   pY <- PY_full(Y$tY, P)
@@ -761,7 +762,8 @@ st_finalize_shocked_fit <- function(yields, time, phi_hat, Xt, BS0, curves, mats
     curve = projected$curve,
     sigma_JT = sigma_JT,
     Xt = Xt,
-    W = W
+    W = W,
+    input_spec = .cc_input_spec(yields, mats, curves, Xt)
   ))
 }
 
@@ -799,6 +801,22 @@ st_validate_baseline_state <- function(baseline_state, curves = NULL, mats = NUL
     stop("Supplied `reference` does not match the reference curve stored in `baseline_state`.")
   }
 
+  observed <- .cc_yields(baseline_state$single_curve_state$yields,
+                         baseline_state$mats, baseline_state$curves, baseline_state$reference)
+  time <- observed[[1]][[1]]
+  if (!identical(.cc_index(time), .cc_index(baseline_state$single_curve_state$time))) {
+    stop("Cached single-curve time index does not match its yields.", call. = FALSE)
+  }
+  X <- .cc_features(baseline_state$xt_state$Xt, time)
+  spec <- baseline_state$input_spec
+  if (!is.null(spec) &&
+      (!identical(spec$curves, baseline_state$curves) ||
+       !identical(as.numeric(spec$mats), as.numeric(baseline_state$mats)) ||
+       !identical(.cc_index(spec$time), .cc_index(time)) ||
+       !identical(spec$features$columns, colnames(X)) || spec$features$count != ncol(X))) {
+    stop("Cached baseline inputs no longer match its stored input specification.", call. = FALSE)
+  }
+
   baseline_state
 }
 
@@ -815,6 +833,7 @@ mc_fit_shock_baseline <- function(yields, lambdas, cutoffs, reference,
                                   CR_verb = FALSE, CR_term = TRUE,
                                   curves, mats) {
   yields <- st_validate_yields_input(yields, curves, reference)
+  yields <- .cc_yields(yields, mats, curves, reference)
 
   single_curve_state <- st_prepare_single_curve_state(
     yields = yields,
@@ -883,6 +902,9 @@ mc_fit_shock_baseline <- function(yields, lambdas, cutoffs, reference,
     xt_state = baseline_xt_state,
     BS0 = baseline_BS0,
     baseline_fit = baseline_fit_state,
+    input_spec = .cc_input_spec(yields, mats, curves, baseline_xt_state$Xt,
+                                baseline_xt_state$feature_spec,
+                                decay = single_curve_state$input_spec$decay),
     config = list(
       lambdas = lambdas,
       cutoffs = cutoffs,

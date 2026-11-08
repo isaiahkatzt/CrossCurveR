@@ -24,13 +24,15 @@ dly_fit_from_sc(dly_sc, actual_yields = NULL,
 \arguments{
   \item{yields}{A named list of country yield data frames. Each has a time
   column first, followed by finite numeric yields in the order of \code{mats}.
-  Country observations and maturities must already be aligned.}
-  \item{mats}{Numeric maturities, conventionally in months. When omitted from
+  Country observations must have the same unique increasing index. Named
+  curves and maturity columns are matched by identity.}
+  \item{mats}{Positive, unique, increasing numeric maturities in months. When omitted from
   \code{dly_fit_from_sc()}, maturities are inferred from the yield column names.}
   \item{lambdas}{Candidate positive decay parameters in inverse maturity units.
   A single value fixes the decay; otherwise each country minimizes its
   two-factor yield sum of squared errors over the supplied grid.}
-  \item{curves}{Country names in the same order as the yield list.}
+  \item{curves}{Unique country names specifying the output order. Named yield
+  lists are reordered to these identities, without relabelling countries.}
   \item{reference}{Country whose first principal-component loadings determine
   the positive orientation of the global factors.}
   \item{center, scale.}{Centering and scaling controls passed to
@@ -41,6 +43,7 @@ dly_fit_from_sc(dly_sc, actual_yields = NULL,
   If \code{NULL}, residuals are measured against the reconstructed country fits.}
 }
 \details{
+See \code{\link{estimation_inputs}} for alignment checks and unit conventions.
 Country curves use the Nelson--Siegel level and slope loadings. Separate first
 principal components of the country level and slope panels provide the global
 factors. Country factors are regressed on their matching global factor with an
@@ -65,5 +68,6 @@ selected decay, time index, yield names, loadings, factors, and fitted yields.
 \code{dly_fit()} and \code{dly_fit_from_sc()} return lists containing metadata,
 \code{single_curve}, \code{country_factors}, \code{global_factors},
 \code{factor_models}, \code{country_betas}, \code{yields}, \code{residuals},
-and \code{dynamics}. \code{dly_fit()} also records \code{lambda_grid}.
+\code{dynamics}, and the alignment and units contract in \code{input_spec}.
+\code{dly_fit()} also records \code{lambda_grid}.
 }

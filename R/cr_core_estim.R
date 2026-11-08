@@ -73,8 +73,8 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
   init <- match.arg(init)
   .cr_validate_iteration_controls(max_iter, tol, check_every)
 
-  W <- as.matrix(W)
-  X <- as.matrix(X)
+  inputs <- .cc_cov_inputs(W, X, S0, B)
+  W <- inputs$W; X <- inputs$X; S0 <- inputs$S0; B <- inputs$B
 
   if (nrow(W) != nrow(X)) {
     stop("W and X must have the same number of rows.")
@@ -226,7 +226,8 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
     iter = iter,
     converged = converged,
     loglik = if (use_loglik) ll_now else NULL,
-    S0_shrink_diag = S0_shrink_diag
+    S0_shrink_diag = S0_shrink_diag,
+    input_spec = .cc_cov_spec(W, X)
   )
 
   if (store_path) {
@@ -244,7 +245,8 @@ zero_mean_covreg <- function(W, X, init = c("adaptive", "static"), max_iter = 10
                              S0_shrink_diag = 0, verb = FALSE, term = FALSE) {
   init <- match.arg(init)
   bnorm = 1e10; snorm = 1e10
-  W <- as.matrix(W)
+  inputs <- .cc_cov_inputs(W, X, S0, B)
+  W <- inputs$W; X <- inputs$X; S0 <- inputs$S0; B <- inputs$B
   P <- ncol(W); Q <- ncol(X); N <- nrow(W)
 
   if (is.null(S0)) { S0 <- stats::cov(W) }
@@ -299,10 +301,10 @@ zero_mean_covreg <- function(W, X, init = c("adaptive", "static"), max_iter = 10
         bnorm <- Matrix::norm(b_est[[iter]] - b_est[[iter-9]], type = 'F')
         snorm <- Matrix::norm(s_est[[iter]] - s_est[[iter-9]], type = 'F')
       }
-      if (bnorm < tol & snorm < tol) {return(list(S0=S0, B=B, b_est=b_est, s_est=s_est, iter=iter, S0_shrink_diag=S0_shrink_diag))}
+      if (bnorm < tol & snorm < tol) {return(list(S0=S0, B=B, b_est=b_est, s_est=s_est, iter=iter, S0_shrink_diag=S0_shrink_diag, input_spec=.cc_cov_spec(W, X)))}
     }
   }
-  return(list(S0=S0, B=B, b_est=b_est, s_est=s_est, S0_shrink_diag=S0_shrink_diag))
+  return(list(S0=S0, B=B, b_est=b_est, s_est=s_est, S0_shrink_diag=S0_shrink_diag, input_spec=.cc_cov_spec(W, X)))
 }
 
 covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter = 500, tol = 1e-8,
@@ -313,8 +315,8 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
   init <- match.arg(init)
   .cr_validate_iteration_controls(max_iter, tol, check_every)
 
-  W <- as.matrix(W)
-  X <- as.matrix(X)
+  inputs <- .cc_cov_inputs(W, X, S0, B)
+  W <- inputs$W; X <- inputs$X; S0 <- inputs$S0; B <- inputs$B
 
   if (nrow(W) != nrow(X)) {
     stop("W and X must have the same number of rows.")
@@ -441,7 +443,8 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
     iter = iter,
     converged = converged,
     loglik = if (use_loglik) ll_now else NULL,
-    S0_shrink_diag = S0_shrink_diag
+    S0_shrink_diag = S0_shrink_diag,
+    input_spec = .cc_cov_spec(W, X)
   )
 
   if (store_path) {

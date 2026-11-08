@@ -1,5 +1,6 @@
 # CrossCurveR (development version)
 
+- Validate estimation input identities, finite values, observation alignment, maturity grids and fixed decay parameters; match named inputs without relabelling curves, changing samples or converting units. Record input and feature-transformation specifications while preserving existing notebook calculations.
 - Split DLY estimation, static decomposition, dynamics, and fitting orchestration into four modules; shorten function names while retaining existing names as compatibility aliases and preserving fitting behavior and notebook outputs.
 - Add initial package metadata, README, citation, and build-ignore skeletons.
 - Move reusable code into a package namespace with explicit runtime dependencies.

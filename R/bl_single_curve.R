@@ -29,6 +29,8 @@ l2_loss_lambda <- function(lambda_grid, daily_yield, mats) {
 }
 
 lambda_grid_search <- function(lambda_grid, yields, mats, loss = l2_loss_lambda) {
+  .cc_decay(lambda_grid, "`lambda_grid`")
+  yields <- .cc_panel(yields, mats)
   ## early exit: only one lambda provided
   if (length(lambda_grid) == 1) {
     return(lambda_grid)
@@ -60,6 +62,7 @@ sven_phi <- function(lambda1, lambda2, mats) {
 }
 
 bl_NSbetas <- function(yield, lambda_optim, cross_phi, mats) {
+  yield <- .cc_panel(yield, mats)
   matrix_yield <- as.matrix(yield[-1])
   NSbetas <- Matrix::t(cross_phi %*% Matrix::t(matrix_yield))
   return(list(NSbetas = NSbetas, m_yield = matrix_yield))
@@ -72,6 +75,8 @@ bl_NSfit <- function(matrix_yield, phi, NSbetas, lambda_optim, mats) {
 }
 
 bl_bdiag_H <- function(Wt, rate_cutoffs, mats) {
+  .cc_mats(mats)
+  Wt <- .cc_rates(Wt, mats, "Residual matrix")
   # Validate cutoffs
   if (!is.numeric(rate_cutoffs) || length(rate_cutoffs) != 2) {
     stop("Invalid rate cutoffs (requires a numeric vector of length 2)")
@@ -80,7 +85,8 @@ bl_bdiag_H <- function(Wt, rate_cutoffs, mats) {
   r2 <- rate_cutoffs[2]
   p <- length(mats)
 
-  if (r1 < 1 || r2 <= r1 || r2 >= p) {
+  if (any(!is.finite(rate_cutoffs)) || any(rate_cutoffs != floor(rate_cutoffs)) ||
+      r1 < 1 || r2 <= r1 || r2 >= p) {
     stop("Rate cutoffs must be valid indices within the maturity range")
   }
 
@@ -131,6 +137,7 @@ bl_single_curve <- function(lambda_select, yields, cutoffs, mats) {
 #############################################
 
 sc_NSdaily <- function(nt_yields, mats) {
+  nt_yields <- .cc_rates(nt_yields, mats)
   # single curve daily lambda NS estimation
   dyn_NSparams <- YieldCurve::Nelson.Siegel(nt_yields, mats)
   dyn_NSphi <- lapply(dyn_NSparams[, 4], NS_loadings, mats)
@@ -139,10 +146,13 @@ sc_NSdaily <- function(nt_yields, mats) {
   for (i in seq_len(nrow(dyn_NSparams))) {
     dyn_NSyields[i, ] <- dyn_NSparams[i, 1:3] %*% dyn_NSphi[[i]]
   }
-  return(list(NSyields = dyn_NSyields, NSbetas = dyn_NSparams[, 1:3]))
+  return(list(NSyields = dyn_NSyields, NSbetas = dyn_NSparams[, 1:3],
+              input_spec = list(decay = list(selected = as.numeric(dyn_NSparams[, 4]),
+                                            parameterization = "inverse months"))))
 }
 
 sc_NSwindow <- function(lambda, nt_yields, mats) {
+  nt_yields <- .cc_rates(nt_yields, mats)
   # single lambda NS estimation
   win_NSphi <- bl_phi(lambda, mats)
   win_NSbetas <- Matrix::t(win_NSphi$cross_phi %*% Matrix::t(nt_yields))
@@ -152,6 +162,7 @@ sc_NSwindow <- function(lambda, nt_yields, mats) {
 }
 
 sc_Svensson <- function(lambda1, lambda2, nt_yields, mats) {
+  nt_yields <- .cc_rates(nt_yields, mats)
   ## static lambda Svensson estimation
   win_Svenphi <- sven_phi(lambda1, lambda2, mats)
   win_Svenbetas <- Matrix::t(win_Svenphi$cross_phi %*% Matrix::t(nt_yields))
@@ -163,6 +174,10 @@ sc_Svensson <- function(lambda1, lambda2, nt_yields, mats) {
 sc_fit <- function(yields, mats, type = c("nelson", "svensson", "daily"), ts=TRUE,
                    lambdas = seq(from = 0.001, to = 1, length.out = 100), slambdas = NULL) {
   type = match.arg(type)
+  yields <- .cc_panel(yields, mats)
+  if (type == "svensson" && length(slambdas) != 2L) {
+    stop("`slambdas` must contain two positive month-based time constants.", call. = FALSE)
+  }
   time <- yields[,1]; nt_yield <- yields[,-1]
 
   if (type == "daily") {
@@ -191,5 +206,10 @@ sc_fit <- function(yields, mats, type = c("nelson", "svensson", "daily"), ts=TRU
     beta_dynamic <- apply(model_betas, 2, stats::ar)
   }
 
-  return(list(yields = model_yields, betas = model_betas, dynamic = beta_dynamic))
+  decay <- switch(type,
+    daily = yield_estim$input_spec$decay,
+    nelson = list(selected = lambda, grid = lambdas, parameterization = "inverse months"),
+    svensson = list(selected = slambdas, parameterization = "month-based time constants"))
+  return(list(yields = model_yields, betas = model_betas, dynamic = beta_dynamic,
+              input_spec = .cc_input_spec(list(yields), mats, curves = NULL, decay = decay)))
 }

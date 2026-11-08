@@ -54,6 +54,8 @@ blce_rescale_yield <- function(normalized, sqrt_sigma_t, P, ptype = c("tenor", "
 }
 
 .bl_prepare_single_curve_state <- function(yields, lambdas, cutoffs, curves, mats) {
+  yields <- .cc_yields(yields, mats, curves)
+  .cc_decay(lambdas)
   mat_str <- sapply(mats, numeric_to_matname)
   mds <- as.vector(Matrix::t(outer(curves, mat_str, paste, sep = ".")))
   curve_lambdas <- vapply(yields, function(curve_yield) {
@@ -101,6 +103,8 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
                        CR_verb=FALSE, CR_term=TRUE,
                        curves, mats) {
   ## full endogenous covariate fit
+  .cc_reference(reference, curves)
+  yields <- .cc_yields(yields, mats, curves, reference)
 
   ## build vector yield embedding and permutation matrix
   Y <- vecY(yields, curves, mats)
@@ -127,6 +131,7 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
       k_count = k_count, k_pass = k_pass, hp_lambda = hp_lambda, henderson_k = henderson_k
     )
   }
+  Xt <- .cc_features(Xt, ytime)
 
   ## covariance regression and sigma estimation
   cc_BS0_feature <- blcc_fe(Xt=Xt, Wt=W, mats=mats, covreg=CR_algo, init=CR_init,
@@ -159,7 +164,13 @@ mc_fit_end <- function(yields, lambdas, cutoffs, reference,
     BS0=cc_BS0_feature,
     Xt=Xt,
     W=W,
-    ns_factor=bl_yields[['betas']])
+    ns_factor=bl_yields[['betas']],
+    input_spec=.cc_input_spec(yields, mats, curves, Xt,
+      .bl_feature_spec(cc_ci_features, X_normalize, X_trunc,
+                       Xt_smooth, smoother, knot_count, k_count, k_pass,
+                       hp_lambda, henderson_k),
+      decay=list(selected=single_curve$lambdas, grid=lambdas,
+                 parameterization="inverse months")))
     )
 }
 
@@ -171,10 +182,12 @@ mc_fit_exo <- function(yields, lambdas, cutoffs, reference, Xt, X_normalize=TRUE
                        CR_verb=FALSE, CR_term=TRUE,
                        curves, mats) {
   ## full exogenous covariate fit
+  yields <- .cc_yields(yields, mats, curves)
 
   ## build vector yield embedding and permutation matrix
   Y <- vecY(yields, curves, mats)
   ytime <- Y[['time']]
+  Xt <- .cc_features(Xt, ytime)
 
   P <- bln_build_P(curves, mats)
   pY <- PY_full(Y[['tY']], P)
@@ -191,6 +204,7 @@ mc_fit_exo <- function(yields, lambdas, cutoffs, reference, Xt, X_normalize=TRUE
       k_count = k_count, k_pass = k_pass, hp_lambda = hp_lambda, henderson_k = henderson_k
     )
   }
+  Xt <- .cc_features(Xt, ytime)
 
   ## covariance regression and sigma estimation
   cc_BS0_feature <- blcc_fe(Xt=Xt, Wt=W, mats=mats, covreg=CR_algo, init=CR_init,
@@ -220,5 +234,11 @@ mc_fit_exo <- function(yields, lambdas, cutoffs, reference, Xt, X_normalize=TRUE
     sigma_JT=cc_Sigma,
     BS0=cc_BS0_feature,
     Xt=Xt,
-    W=W))
+    W=W,
+    input_spec=.cc_input_spec(yields, mats, curves, Xt,
+      list(source="exogenous", normalization="as supplied; X_normalize is inactive",
+           smoothing=.bl_smoothing_spec(Xt_smooth, smoother, knot_count, k_count,
+                                        k_pass, hp_lambda, henderson_k)),
+      decay=list(selected=single_curve$lambdas, grid=lambdas,
+                 parameterization="inverse months"))))
 }

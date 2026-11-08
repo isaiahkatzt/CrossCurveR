@@ -72,6 +72,37 @@ library(CrossCurveR)
 TODO: add a small reproducible example covering aligned curve inputs,
 MCE and DLY fitting, diagnostics, and stress testing.
 
+## Estimation input contracts
+
+Each yield panel is a data frame with its observation index first, followed by
+finite numeric yields. Multi-curve panels must have the same unique, increasing
+observation index. Curve names identify countries; `curves` requests their order.
+Maturity labels are matched to the positive, unique, increasing `mats` grid.
+Equivalent prefixed or unprefixed M/Y labels are accepted. Ordering named curves
+or labelled maturities moves their values with them. Fitting never intersects
+dates, fills gaps, drops observations, or guesses units. Ordinary market-calendar
+gaps are allowed; dynamic steps mean successive observations.
+
+The existing workflow uses maturities in **months** and yields in **percent**
+(`5` means 5%). NS decay is in inverse months; Svensson decay arguments are
+month-based time constants. `matname_to_numeric()` retains its historical return
+unit of years. Zero and negative yields are valid. Rate definition and compounding
+are supplied by the caller: estimation does not turn par yields into zero rates.
+Pricing examples interpret inputs as continuously compounded zero yields.
+
+`Xt` must be a finite numeric matrix with one row per yield observation. Date
+row names are checked when supplied; numeric data-frame row labels and matrices
+without row names use positional alignment.
+Feature order is part of the fitted design. Named covariance initializers and
+prediction features are matched by identity. No intercept or normalization is
+added. In particular, `mc_fit_exo()` retains its existing behavior: `reference`
+and `X_normalize` are inactive compatibility arguments.
+
+Complete fits add `input_spec` metadata describing dates, curve and maturity
+order, units, decay choices, and feature layout. Endogenous fits also record the feature basis,
+centering, scaling, and smoothing actually used. Existing numerical outputs and
+normalization choices are preserved. See `?estimation_inputs` for the full contract.
+
 ## Yield data input
 
 Read labelled CSV panels through the validated reader:

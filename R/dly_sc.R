@@ -9,6 +9,7 @@ dly_phi <- function(lambda_optim, mats) {
 }
 
 dly_sc_fit <- function(lambda_select, yields, mats) {
+  yields <- .cc_panel(yields, mats)
   curve_phi <- dly_phi(lambda_select, mats)
   curve_betas <- bl_NSbetas(yields, lambda_select, curve_phi$cross_phi, mats)
   curve_nsfit <- bl_NSfit(
@@ -37,6 +38,8 @@ dly_sc_fit_all <- function(lambdas, yields, mats, curves = names(yields)) {
   if (length(curves) != length(yields)) {
     stop("curves must have the same length as yields.")
   }
+  yields <- .cc_yields(yields, mats, curves)
+  .cc_decay(lambdas)
 
   curve_lambdas <- vapply(yields, function(x) {
     lambda_grid_search(lambdas, x, mats, loss = l2_loss_ls)

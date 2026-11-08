@@ -56,6 +56,22 @@ make_fake_shock_baseline <- function() {
   ), class = "mc_shock_baseline")
 }
 
+test_that("cached baseline contracts detect changes in dates and feature identities", {
+  baseline <- make_fake_shock_baseline()
+  baseline$input_spec <- .cc_input_spec(baseline$yields, baseline$mats,
+                                       baseline$curves, baseline$xt_state$Xt)
+  expect_identical(st_validate_baseline_state(baseline), baseline)
+  wrong <- baseline
+  wrong$xt_state$Xt <- wrong$xt_state$Xt[-1, , drop = FALSE]
+  expect_error(st_validate_baseline_state(wrong), "one row")
+  wrong <- baseline
+  colnames(wrong$xt_state$Xt) <- "different"
+  expect_error(st_validate_baseline_state(wrong), "stored input specification")
+  wrong <- baseline
+  wrong$single_curve_state$yields$gbr$time <- fixture_time + 1
+  expect_error(st_validate_baseline_state(wrong), "observation index")
+})
+
 test_that("mc_fit_shock_baseline builds and returns a reusable baseline state", {
   fake_single_curve_state <- make_fake_shock_baseline()$single_curve_state
   fake_xt_state <- make_fake_shock_baseline()$xt_state
@@ -763,7 +779,7 @@ test_that("st_align_Xt_to_baseline reorders compatible columns and rejects incom
 })
 
 test_that("st_finalize_shocked_fit orchestrates covariance rescaling into tenor and curve outputs", {
-  yields <- make_pair_yields()
+  yields <- lapply(make_pair_yields(), function(x) x[, 1:3])
   fake_tY <- data.frame(
     usa.01M = seq_along(fixture_time),
     usa.03M = seq_along(fixture_time) + 1,
@@ -813,7 +829,7 @@ test_that("st_finalize_shocked_fit orchestrates covariance rescaling into tenor 
     )
   )
 
-  expect_equal(names(result), c("tenor", "curve", "sigma_JT", "Xt", "W"))
+  expect_equal(names(result), c("tenor", "curve", "sigma_JT", "Xt", "W", "input_spec"))
   expect_equal(captured_rescale_types, c("tenor", "curve"))
   expect_equal(result$Xt, Xt)
   expect_equal(result$tenor$kind, rep("tenor", length(fixture_time)))

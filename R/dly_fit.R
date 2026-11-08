@@ -11,10 +11,11 @@ dly_fit_static_sc <- function(dly_sc, actual_yields = NULL,
   if (is.null(curves)) {
     curves <- names(dly_sc)
   }
+  validated <- .cc_dly_sc(dly_sc, mats, curves)
+  dly_sc <- validated$sc
+  mats <- validated$mats
 
-  if (!reference %in% curves) {
-    stop("reference must be one of the curve names supplied in curves.")
-  }
+  .cc_reference(reference, curves)
 
   level_factor <- dly_factor_panel(dly_sc, curves = curves, latent = "L")
   slope_factor <- dly_factor_panel(dly_sc, curves = curves, latent = "S")
@@ -47,15 +48,9 @@ dly_fit_static_sc <- function(dly_sc, actual_yields = NULL,
   if (is.null(actual_yields)) {
     actual_yields <- raw_yields
   }
-
-  if (is.null(mats)) {
-    mats <- unique(unlist(lapply(raw_yields[curves], function(curve_df) {
-      numeric_mats <- suppressWarnings(vapply(colnames(curve_df)[-1], function(x) {
-        12 * matname_to_numeric(sub("^X", "", x))
-      }, numeric(1)))
-      numeric_mats[!is.na(numeric_mats)]
-    })))
-    mats <- sort(as.numeric(mats))
+  actual_yields <- .cc_yields(actual_yields, mats, curves)
+  if (!identical(.cc_index(actual_yields[[1]][[1]]), .cc_index(dly_sc[[1]]$time))) {
+    stop("Observed yields must match the country-fit observation index.", call. = FALSE)
   }
 
   return(list(
@@ -90,6 +85,9 @@ dly_fit_static_sc <- function(dly_sc, actual_yields = NULL,
       idiosyncratic = idio_yields,
       global_plus_idiosyncratic = global_plus_idio_yields
     ),
+    input_spec = .cc_input_spec(actual_yields, mats, curves,
+      decay = list(selected = vapply(dly_sc, `[[`, numeric(1), "lambda"),
+                   parameterization = "inverse months")),
     residuals = list(
       raw = dly_curve_residuals(actual_yields, raw_yields, curves),
       global = dly_curve_residuals(actual_yields, global_yields, curves),
@@ -168,6 +166,11 @@ dly_fit_dynamic <- function(static_fit, actual_yields = NULL) {
   if (is.null(actual_yields)) {
     actual_yields <- static_fit$yields$raw
   }
+  actual_yields <- .cc_yields(actual_yields, static_fit$mats, curves)
+  if (!identical(.cc_index(actual_yields[[1]][[1]]),
+                 .cc_index(static_fit$single_curve[[1]]$time))) {
+    stop("Observed yields must match the static-fit observation index.", call. = FALSE)
+  }
 
   dynamic_fit <- static_fit
   dynamic_fit$country_betas$dislocation_propagated <- propagated_betas
@@ -225,6 +228,8 @@ dly_fit <- function(yields, mats,
   if (is.null(curves)) {
     curves <- paste0("curve", seq_along(yields))
   }
+  .cc_reference(reference, curves)
+  yields <- .cc_yields(yields, mats, curves, reference)
 
   dly_sc <- dly_sc_fit_all(lambdas = lambdas, yields = yields, mats = mats, curves = curves)
 

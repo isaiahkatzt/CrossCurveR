@@ -2,6 +2,35 @@
 #            Feature Extraction             #
 #############################################
 
+.bl_smoothing_spec <- function(enabled, smoother, knot_count, k_count, k_pass,
+                               hp_lambda, henderson_k) {
+  list(enabled = enabled,
+       method = if (enabled) match.arg(smoother, c("ns", "bs", "rm", "hp", "henderson")) else NULL,
+       controls = list(knot_count = knot_count, k_count = k_count, k_pass = k_pass,
+                       hp_lambda = hp_lambda, henderson_k = henderson_k))
+}
+
+# Record the transformations actually used; do not normalize again or change
+# the existing feature matrices. Scenario-specific transformations stay visible.
+.bl_feature_spec <- function(features, normalize, trunc, smooth, smoother,
+                             knot_count, k_count, k_pass, hp_lambda, henderson_k) {
+  relationships <- lapply(names(features$cc_ecm), function(curve) {
+    ecm <- features$cc_ecm[[curve]]
+    beta <- features$cc_beta[[curve]]
+    if (is.null(beta) || is.null(ecm$Gmatrix) || is.null(ecm$rank) || ecm$rank <= 0) return(NULL)
+    raw <- beta %*% ecm$Gmatrix
+    list(factor_columns = colnames(beta), basis = ecm$Gmatrix,
+         feature_columns = colnames(features$cc_cspread[[curve]]),
+         center = if (normalize) colMeans(raw) else rep(0, ncol(raw)),
+         scale = if (normalize) apply(raw, 2, stats::sd) else rep(1, ncol(raw)))
+  })
+  names(relationships) <- names(features$cc_ecm)
+  list(source = "endogenous", normalized = normalize, truncated = trunc,
+       relationships = relationships,
+       smoothing = .bl_smoothing_spec(smooth, smoother, knot_count, k_count,
+                                      k_pass, hp_lambda, henderson_k))
+}
+
 blmc_phi <- function(bl_sc_list){
   return(Matrix::t(do.call(cbind, lapply(bl_sc_list$phi, `[[`, "phi"))))
 }

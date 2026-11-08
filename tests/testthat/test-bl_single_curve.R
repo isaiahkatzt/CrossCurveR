@@ -83,7 +83,7 @@ test_that("sc_fit returns model outputs for daily, nelson, and svensson modes", 
   colnames(sven_curve) <- c("time", sapply(fixture_mats, numeric_to_matname))
   svensson_fit <- sc_fit(sven_curve, fixture_mats, type = "svensson", ts = FALSE, slambdas = c(1.5, 3))
 
-  expect_equal(names(daily_fit), c("yields", "betas", "dynamic"))
+  expect_equal(names(daily_fit), c("yields", "betas", "dynamic", "input_spec"))
   expect_equal(dim(nelson_fit$betas), c(nrow(curve), 3))
   expect_equal(dim(svensson_fit$betas), c(nrow(curve), 4))
   expect_true(is.na(daily_fit$dynamic))

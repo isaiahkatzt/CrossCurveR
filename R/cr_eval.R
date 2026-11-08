@@ -9,8 +9,8 @@ cr_build <- function(object, X_new = NULL, return_array = TRUE, drop_single = TR
     stop("object must contain components $B and $S0.")
   }
 
-  B  <- as.matrix(object$B)
-  S0 <- as.matrix(object$S0)
+  B  <- .cc_matrix(object$B, "`B`")
+  S0 <- .cc_matrix(object$S0, "`S0`")
 
   P <- nrow(B)
   Q <- ncol(B)
@@ -28,10 +28,18 @@ cr_build <- function(object, X_new = NULL, return_array = TRUE, drop_single = TR
     }
   }
 
-  X_new <- as.matrix(X_new)
+  X_new <- .cc_features(X_new, label = "`X_new`")
 
   if (ncol(X_new) != Q) {
     stop("X_new must have ncol(X_new) = ncol(B).")
+  }
+  expected <- object$input_spec$feature_columns
+  if (is.null(expected)) expected <- colnames(B)
+  if (!is.null(expected) && !is.null(colnames(X_new))) {
+    if (!setequal(expected, colnames(X_new))) {
+      stop("X_new feature names must match the fitted design.", call. = FALSE)
+    }
+    X_new <- X_new[, expected, drop = FALSE]
   }
 
   N_new <- nrow(X_new)

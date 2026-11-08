@@ -104,7 +104,7 @@ test_that("blce_smooth_Xt dispatches to spline, RM, HP, and Henderson smoothers"
 })
 
 test_that("mc_fit_end assembles the expected top-level output structure", {
-  yields <- make_pair_yields()
+  yields <- lapply(make_pair_yields(), function(x) x[, 1:3])
   fake_time <- yields$usa$time
   fake_tY <- data.frame(
     usa.01M = seq_along(fake_time),
@@ -156,14 +156,14 @@ test_that("mc_fit_end assembles the expected top-level output structure", {
 
   expect_equal(
     names(result),
-    c("tenor", "curve", "sigma_JT", "curveECM", "BS0", "Xt", "W", "ns_factor")
+    c("tenor", "curve", "sigma_JT", "curveECM", "BS0", "Xt", "W", "ns_factor", "input_spec")
   )
   expect_s3_class(result$tenor, "data.frame")
   expect_equal(nrow(result$Xt), length(fake_time))
 })
 
 test_that("mc_fit_exo assembles the expected top-level output structure", {
-  yields <- make_pair_yields()
+  yields <- lapply(make_pair_yields(), function(x) x[, 1:3])
   fake_time <- yields$usa$time
   fake_tY <- data.frame(
     usa.01M = seq_along(fake_time),
@@ -211,14 +211,14 @@ test_that("mc_fit_exo assembles the expected top-level output structure", {
 
   expect_equal(
     names(result),
-    c("tenor", "curve", "sigma_JT", "BS0", "Xt", "W")
+    c("tenor", "curve", "sigma_JT", "BS0", "Xt", "W", "input_spec")
   )
   expect_s3_class(result$curve, "data.frame")
   expect_equal(ncol(result$Xt), 2)
 })
 
 test_that("mc_fit_end forwards S0 diagonal shrinkage to covariance regression", {
-  yields <- make_pair_yields()
+  yields <- lapply(make_pair_yields(), function(x) x[, 1:3])
   fake_time <- yields$usa$time
   fake_tY <- data.frame(
     usa.01M = seq_along(fake_time),
