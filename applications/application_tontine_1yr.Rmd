@@ -51,7 +51,7 @@ lookback_years <- 1
 lambdas <- seq(0.01, 0.15, by = 0.005)
 cutoffs <- c(4, 8)
 fit_seed <- 999
-event_seed <- 20260430
+event_seed <- 999
 
 mce_baseline_controls <- list(
   ECM_alpha = 0.2,
@@ -387,7 +387,8 @@ shock_curve_models <- purrr::imap(shock_examples, function(shock_spec, shock_key
     mce_controls = mce_baseline_controls,
     mce_shock_controls = mce_shock_controls,
     include_models = shock_model_names,
-    fit_seed = fit_seed
+    fit_seed = fit_seed,
+    baseline_curve_models = baseline_curve_models
   )
 })
 

@@ -559,3 +559,291 @@ test_that("mc_fit_shock_refit_from_baseline delegates to MCE refits without sing
   expect_false(captured$reuse_BS0)
   expect_false(captured$reuse_ECM)
 })
+
+test_that("st_build_shock_matrix validates inputs and places named shocks", {
+  shock_matrix <- st_build_shock_matrix(
+    curves = fixture_curves,
+    model_factors = c("L", "S", "C"),
+    shock_curves = "gbr",
+    shock_factors = c("L", "C"),
+    magnitude = c(C = -0.2, L = 0.5)
+  )
+
+  expect_equal(dim(shock_matrix), c(3, 2))
+  expect_equal(rownames(shock_matrix), c("L", "S", "C"))
+  expect_equal(colnames(shock_matrix), fixture_curves)
+  expect_true(all(is.na(shock_matrix[, "usa"])))
+  expect_equal(shock_matrix["L", "gbr"], 0.5)
+  expect_true(is.na(shock_matrix["S", "gbr"]))
+  expect_equal(shock_matrix["C", "gbr"], -0.2)
+
+  expect_error(
+    st_build_shock_matrix(fixture_curves, c("L", "S", "C"), "usa", c("L", "S"), 0.1),
+    "Scalar `magnitude`"
+  )
+  expect_error(
+    st_build_shock_matrix(fixture_curves, c("L", "S", "C"), "cad", "L", 0.1),
+    "`shock_curves` must be a subset"
+  )
+  expect_error(
+    st_build_shock_matrix(c("usa", "usa"), c("L", "S", "C"), "usa", "L", 0.1),
+    "`curves` must contain unique"
+  )
+})
+
+test_that("st_multiplicative applies factor multipliers only inside the requested window", {
+  curve_dns_factor <- list(
+    usa = cbind(L = 1:5, S = seq(0.1, 0.5, by = 0.1)),
+    gbr = cbind(L = 6:10, S = seq(0.6, 1, by = 0.1))
+  )
+
+  result <- st_multiplicative(
+    curves = fixture_curves,
+    curve_dns_factor = curve_dns_factor,
+    shock_curves = "usa",
+    shock_factors = "L",
+    shock_magnitude = 0.1,
+    shock_window = 2,
+    shock_window_position = "last"
+  )
+
+  expect_equal(result$shock_matrix["L", "usa"], 1.1)
+  expect_equal(result$shock_matrix["S", "usa"], 1)
+  expect_equal(result$shock_matrix[, "gbr"], c(L = 1, S = 1))
+  expect_equal(result$shocked_factors$usa[1:3, "L"], curve_dns_factor$usa[1:3, "L"])
+  expect_equal(result$shocked_factors$usa[4:5, "L"], curve_dns_factor$usa[4:5, "L"] * 1.1)
+  expect_equal(result$shocked_factors$usa[, "S"], curve_dns_factor$usa[, "S"])
+  expect_equal(result$shocked_factors$gbr, curve_dns_factor$gbr)
+})
+
+test_that("st_apply_factor_shock dispatches to additive or multiplicative shock builders", {
+  captured <- list()
+  curve_dns_factor <- list(
+    usa = cbind(L = 1:3, S = 4:6),
+    gbr = cbind(L = 7:9, S = 10:12)
+  )
+
+  additive_result <- with_temp_bindings(
+    list(
+      st_additive = function(curves, curve_dns_factor, shock_curves, shock_factors,
+                             shock_magnitude, shock_window, shock_window_position) {
+        captured$additive <<- list(
+          curves = curves,
+          shock_curves = shock_curves,
+          shock_factors = shock_factors,
+          shock_magnitude = shock_magnitude,
+          shock_window = shock_window,
+          shock_window_position = shock_window_position
+        )
+        list(tag = "additive")
+      },
+      st_multiplicative = function(...) stop("multiplicative should not be called")
+    ),
+    st_apply_factor_shock(
+      curves = fixture_curves,
+      curve_dns_factor = curve_dns_factor,
+      shock_curves = "usa",
+      shock_factors = "L",
+      shock_magnitude = 0.2,
+      shock_type = "additive",
+      shock_window = 1,
+      shock_window_position = "last"
+    )
+  )
+
+  multiplicative_result <- with_temp_bindings(
+    list(
+      st_additive = function(...) stop("additive should not be called"),
+      st_multiplicative = function(curves, curve_dns_factor, shock_curves, shock_factors,
+                                   shock_magnitude, shock_window, shock_window_position) {
+        captured$multiplicative <<- list(
+          curves = curves,
+          shock_curves = shock_curves,
+          shock_factors = shock_factors,
+          shock_magnitude = shock_magnitude,
+          shock_window = shock_window,
+          shock_window_position = shock_window_position
+        )
+        list(tag = "multiplicative")
+      }
+    ),
+    st_apply_factor_shock(
+      curves = fixture_curves,
+      curve_dns_factor = curve_dns_factor,
+      shock_curves = "gbr",
+      shock_factors = "S",
+      shock_magnitude = -0.1,
+      shock_type = "multiplicative",
+      shock_window = 2,
+      shock_window_position = "first"
+    )
+  )
+
+  expect_equal(additive_result$tag, "additive")
+  expect_equal(captured$additive$shock_window_position, "last")
+  expect_equal(multiplicative_result$tag, "multiplicative")
+  expect_equal(captured$multiplicative$shock_curves, "gbr")
+  expect_equal(captured$multiplicative$shock_factors, "S")
+})
+
+test_that("st_build_shocked_curve_state rebuilds curve panels from shocked factors", {
+  single_curve_state <- st_prepare_single_curve_state(
+    yields = make_pair_yields(),
+    lambdas = c(0.35),
+    cutoffs = c(2, 4),
+    curves = fixture_curves,
+    mats = fixture_mats
+  )
+  shocked_factors <- single_curve_state$ns_factor
+  shocked_factors$usa[, "L"] <- shocked_factors$usa[, "L"] + 0.25
+
+  shocked_state <- st_build_shocked_curve_state(
+    single_curve_state = single_curve_state,
+    shocked_factors = shocked_factors
+  )
+
+  expected_usa_fit <- shocked_factors$usa %*% single_curve_state$bl_yields$phi$usa$phi
+
+  expect_equal(names(shocked_state$yields), fixture_curves)
+  expect_equal(colnames(shocked_state$yields$usa), colnames(single_curve_state$yields$usa))
+  expect_equal(
+    unname(as.matrix(shocked_state$yields$usa[, -1])),
+    unname(expected_usa_fit),
+    tolerance = 1e-8
+  )
+  expect_equal(shocked_state$ns_factor$usa, shocked_factors$usa)
+  expect_equal(names(shocked_state$W), paste0("X", sapply(fixture_mats, numeric_to_matname)))
+})
+
+test_that("st_build_xt_from_ecm reuses supplied ECM matrices to build Xt", {
+  single_curve_state <- st_prepare_single_curve_state(
+    yields = make_pair_yields(),
+    lambdas = c(0.35),
+    cutoffs = c(2, 4),
+    curves = fixture_curves,
+    mats = fixture_mats
+  )
+  G <- matrix(c(-1, 0, 0, 1, 0, 0), ncol = 1)
+  colnames(G) <- "level_spread"
+  baseline_ecm <- list(gbr = list(rank = 1, Gmatrix = G))
+
+  xt_state <- st_build_xt_from_ecm(
+    bl_yields = single_curve_state$bl_yields,
+    curves = fixture_curves,
+    reference = "usa",
+    curve_ecm = baseline_ecm,
+    X_normalize = FALSE
+  )
+
+  cc_betas <- blmc_VAR(single_curve_state$bl_yields, reference = "usa", curves = fixture_curves)
+  expected_xt <- cc_betas$gbr %*% G
+  colnames(expected_xt) <- "gbr.level_spread"
+
+  expect_equal(xt_state$Xt, expected_xt, tolerance = 1e-8)
+  expect_equal(xt_state$cc_ci_features$cc_ecm, baseline_ecm)
+  expect_equal(names(xt_state$cc_ci_features$cc_beta), "gbr")
+})
+
+test_that("st_align_Xt_to_baseline reorders compatible columns and rejects incompatible designs", {
+  Xt_new <- cbind(b = 1:3, a = 4:6)
+  Xt_reference <- cbind(a = 10:12, b = 13:15)
+
+  aligned <- st_align_Xt_to_baseline(Xt_new, Xt_reference)
+
+  expect_equal(colnames(aligned), colnames(Xt_reference))
+  expect_equal(aligned[, "a"], Xt_new[, "a"])
+  expect_error(
+    st_align_Xt_to_baseline(cbind(a = 1:3), Xt_reference),
+    "incompatible"
+  )
+  expect_error(
+    st_align_Xt_to_baseline(cbind(a = 1:3, c = 4:6), Xt_reference),
+    "columns do not match"
+  )
+})
+
+test_that("st_finalize_shocked_fit orchestrates covariance rescaling into tenor and curve outputs", {
+  yields <- make_pair_yields()
+  fake_tY <- data.frame(
+    usa.01M = seq_along(fixture_time),
+    usa.03M = seq_along(fixture_time) + 1,
+    gbr.01M = seq_along(fixture_time) + 2,
+    gbr.03M = seq_along(fixture_time) + 3
+  )
+  Xt <- matrix(1, nrow = length(fixture_time), ncol = 1)
+  BS0 <- list(X01M = list(S0 = Matrix::diag(2), B = matrix(1, nrow = 2, ncol = 1)))
+  captured_rescale_types <- character()
+
+  result <- with_temp_bindings(
+    list(
+      vecY = function(...) list(tY = fake_tY, time = fixture_time),
+      bln_build_P = function(...) Matrix::diag(4),
+      PY_full = function(vecY, P) list(py = vecY),
+      tSigma_optim = function(BS0, X) list(tSigma = rep(list(Matrix::diag(4)), length(fixture_time))),
+      sqrt_inv_build = function(...) list(
+        sqrt = rep(list(Matrix::diag(4)), length(fixture_time)),
+        inverse = rep(list(Matrix::diag(4)), length(fixture_time))
+      ),
+      bln_YB = function(PY, sqrt_inv_sigmaT) PY,
+      bln_phi_BT = function(...) rep(list(matrix(1, nrow = 4, ncol = 3)), length(fixture_time)),
+      bln_phi_CT = function(phib, P) phib,
+      cf_curve_cut = function(...) list(usa = matrix(1, nrow = length(fixture_time), ncol = 2), gbr = matrix(1, nrow = length(fixture_time), ncol = 2)),
+      cf_phi_cut = function(...) list(usa = rep(list(matrix(1, nrow = 2, ncol = 3)), length(fixture_time)),
+                                      gbr = rep(list(matrix(1, nrow = 2, ncol = 3)), length(fixture_time))),
+      bln_normalized_fit = function(...) list(
+        n_yield = list(
+          usa = matrix(1, nrow = length(fixture_time), ncol = 2),
+          gbr = matrix(2, nrow = length(fixture_time), ncol = 2)
+        )
+      ),
+      blce_rescale_yield = function(normalized, sqrt_sigma_t, P, ptype, time, curves, mats) {
+        captured_rescale_types <<- c(captured_rescale_types, ptype)
+        data.frame(time = time, kind = ptype)
+      }
+    ),
+    st_finalize_shocked_fit(
+      yields = yields,
+      time = fixture_time,
+      phi_hat = matrix(1, nrow = 4, ncol = 3),
+      Xt = Xt,
+      BS0 = BS0,
+      curves = fixture_curves,
+      mats = c(1, 3),
+      W = list(X01M = matrix(0, nrow = length(fixture_time), ncol = 2))
+    )
+  )
+
+  expect_equal(names(result), c("tenor", "curve", "sigma_JT", "Xt", "W"))
+  expect_equal(captured_rescale_types, c("tenor", "curve"))
+  expect_equal(result$Xt, Xt)
+  expect_equal(result$tenor$kind, rep("tenor", length(fixture_time)))
+  expect_equal(result$curve$kind, rep("curve", length(fixture_time)))
+})
+
+test_that("st_validate_baseline_state accepts reusable baseline states and rejects mismatches", {
+  baseline_state <- make_fake_shock_baseline()
+
+  expect_identical(
+    st_validate_baseline_state(baseline_state, curves = fixture_curves, mats = fixture_mats, reference = "usa"),
+    baseline_state
+  )
+
+  invalid_state <- baseline_state
+  invalid_state$BS0 <- NULL
+  expect_error(
+    st_validate_baseline_state(invalid_state),
+    "`baseline_state` must be created"
+  )
+  expect_error(
+    st_validate_baseline_state(baseline_state, curves = rev(fixture_curves)),
+    "Supplied `curves` do not match"
+  )
+  expect_error(
+    st_validate_baseline_state(baseline_state, mats = fixture_mats[-1]),
+    "Supplied `mats` do not match"
+  )
+  expect_error(
+    st_validate_baseline_state(baseline_state, reference = "gbr"),
+    "Supplied `reference` does not match"
+  )
+})

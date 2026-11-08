@@ -15,6 +15,55 @@ test_that("blce_rescale_yield returns correctly labeled tenor and curve views", 
   expect_true(any(grepl("\\.", colnames(tenor_view)[-1])))
 })
 
+test_that("shared projection agrees with independent weighted least squares", {
+  time <- fixture_time[1]
+  yields <- stats::setNames(lapply(seq_along(fixture_curves), function(i) {
+    panel <- make_ns_curve_df(curve_shift = .2 * i, time = time)
+    panel[, -1] <- panel[, -1] + .05 * sin(seq_along(fixture_mats)^2)
+    panel
+  }), fixture_curves)
+  Y <- vecY(yields, fixture_curves, fixture_mats)
+  P <- bln_build_P(fixture_curves, fixture_mats)
+  phi <- t(NS_loadings(.35, fixture_mats))
+  phi_hat <- do.call(rbind, rep(list(phi), length(fixture_curves)))
+  rownames(phi_hat) <- colnames(Y$tY)
+  variance <- seq_len(nrow(P))
+  result <- .bl_project_rescale(PY_full(Y$tY, P)$py, P, phi_hat,
+    list(diag(sqrt(variance))), list(diag(1 / sqrt(variance))),
+    time, fixture_curves, fixture_mats)
+  expected <- unlist(lapply(seq_along(fixture_curves), function(i) {
+    weights <- 1 / variance[seq.int(i, length(variance), by = length(fixture_curves))]
+    stats::lm.wfit(phi, as.numeric(yields[[i]][1, -1]), w = weights)$fitted.values
+  }), use.names = FALSE)
+  expect_equal(as.numeric(result$curve[1, -1]), expected, tolerance = 1e-10)
+  expect_equal(as.numeric(result$tenor[1, -1]), as.numeric(P %*% expected), tolerance = 1e-10)
+  expect_identical(result$curve$time, time)
+  expect_equal(names(result$curve), c("time", colnames(Y$tY)))
+  expect_equal(names(result$tenor), c("time", colnames(Y$tY)[apply(P, 1, which.max)]))
+})
+
+test_that("single-curve preparation recovers distinct NS curves in curve and tenor order", {
+  yields <- list(
+    usa = make_ns_curve_df(lambda = .2),
+    gbr = make_ns_curve_df(lambda = .5, curve_shift = .2)
+  )
+  state <- .bl_prepare_single_curve_state(yields, c(.2, .5), c(2, 4),
+                                           fixture_curves, fixture_mats)
+  expect_equal(state$lambdas, c(usa = .2, gbr = .5))
+  expect_identical(names(state$bl_yields$nsfit), fixture_curves)
+  for (curve in fixture_curves) {
+    expect_equal(unname(as.matrix(state$bl_yields$nsfit[[curve]]$NSfit)),
+                 unname(as.matrix(yields[[curve]][, -1])), tolerance = 1e-10)
+  }
+  expect_identical(rownames(state$phi_hat), colnames(vecY(yields, fixture_curves, fixture_mats)$tY))
+  expect_identical(names(state$W), paste0("X", vapply(fixture_mats, numeric_to_matname, character(1))))
+  for (residuals in state$W) {
+    expect_identical(colnames(residuals), fixture_curves)
+    expect_equal(unname(residuals), matrix(0, length(fixture_time), length(fixture_curves)),
+                 tolerance = 1e-10)
+  }
+})
+
 test_that("blce_smooth_Xt dispatches to spline, RM, HP, and Henderson smoothers", {
   Xt <- matrix(seq_len(20), ncol = 2)
   ytime <- fixture_time

@@ -54,6 +54,26 @@ make_dly_fixture <- function() {
   )
 }
 
+test_that("short DLY entrypoints preserve existing calls and complete fit outputs", {
+  fixture <- make_dly_fixture()
+  lambda_grid <- c(0.2, 0.35, 0.5)
+
+  # Exercise both exported naming conventions, including positional arguments.
+  sc <- CrossCurveR::dly_sc_fit_all(lambda_grid, fixture$yields, fixture_mats)
+  expect_identical(sc, CrossCurveR::dly_all_sc(lambda_grid, fixture$yields, fixture_mats))
+
+  for (scaled in c(FALSE, TRUE)) {
+    fit <- CrossCurveR::dly_fit(fixture$yields, fixture_mats,
+                              lambdas = lambda_grid, scale. = scaled)
+    rebuilt <- CrossCurveR::dly_fit_from_sc(sc, fixture$yields, scale. = scaled)
+    legacy <- CrossCurveR::dly_fit_from_single_curve(sc, fixture$yields, scale. = scaled)
+    expect_identical(rebuilt, legacy)
+    # Only the top-level fit adds the candidate lambda grid.
+    fit$lambda_grid <- NULL
+    expect_identical(rebuilt, fit)
+  }
+})
+
 test_that("dly_all_sc selects the exact lambda for two-factor NS data", {
   fixture <- make_dly_fixture()
   lambda_grid <- c(0.2, 0.35, 0.5)

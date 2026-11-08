@@ -45,34 +45,21 @@ st_validate_yields_input <- function(yields, curves, reference) {
 }
 
 st_prepare_single_curve_state <- function(yields, lambdas, cutoffs, curves, mats) {
-  mat_str <- sapply(mats, numeric_to_matname)
-  mds <- as.vector(Matrix::t(outer(curves, mat_str, paste, sep = ".")))
   ytime <- yields[[1]][[1]]
-  curve_lambdas <- vapply(yields, function(curve_yield) {
-    lambda_grid_search(lambdas, curve_yield, mats)
-  }, numeric(1))
-
-  curve_fits <- stats::setNames(lapply(seq_along(curves), function(i) {
-    bl_single_curve(curve_lambdas[[i]], yields[[i]], cutoffs, mats)
-  }), curves)
-
-  bl_yields <- purrr::transpose(curve_fits)
-  phi_hat <- bln_phi_hat(bl_yields$phi, mds)
-  W <- blcc_build_Wj(bl_yields$nsfit, mats)
-  H <- Matrix::bdiag(bl_yields$H)
+  single_curve <- .bl_prepare_single_curve_state(yields, lambdas, cutoffs, curves, mats)
 
   return(list(
     curves = curves,
     mats = mats,
     time = ytime,
-    mds = mds,
-    lambdas = curve_lambdas,
+    mds = single_curve$mds,
+    lambdas = single_curve$lambdas,
     yields = yields,
-    bl_yields = bl_yields,
-    phi_hat = phi_hat,
-    W = W,
-    H = H,
-    ns_factor = st_extract_ns_factor(bl_yields, curves)
+    bl_yields = single_curve$bl_yields,
+    phi_hat = single_curve$phi_hat,
+    W = single_curve$W,
+    H = single_curve$H,
+    ns_factor = st_extract_ns_factor(single_curve$bl_yields, curves)
   ))
 }
 
@@ -766,37 +753,12 @@ st_finalize_shocked_fit <- function(yields, time, phi_hat, Xt, BS0, curves, mats
   sqrt_sigma_t <- full_sigma_t$sqrt
   sqrt_inv_sigma_t <- full_sigma_t$inverse
 
-  yb <- bln_YB(pY$py, sqrt_inv_sigma_t)
-  phib <- bln_phi_BT(phi_hat, P, sqrt_inv_sigma_t)
-  phic <- bln_phi_CT(phib, P)
-  yc <- PY_full(yb, Matrix::t(P))
-
-  ycut <- cf_curve_cut(yc$py, curves, mats)
-  phicut <- cf_phi_cut(phic, curves, mats)
-  normalized <- bln_normalized_fit(ycut, phicut, curves, mats)
-
-  shocked_tenor <- blce_rescale_yield(
-    normalized$n_yield,
-    sqrt_sigma_t,
-    P,
-    "tenor",
-    time = time,
-    curves = curves,
-    mats = mats
-  )
-  shocked_curve <- blce_rescale_yield(
-    normalized$n_yield,
-    sqrt_sigma_t,
-    P,
-    "curve",
-    time = time,
-    curves = curves,
-    mats = mats
-  )
+  projected <- .bl_project_rescale(pY$py, P, phi_hat, sqrt_sigma_t, sqrt_inv_sigma_t,
+                                   time = time, curves = curves, mats = mats)
 
   return(list(
-    tenor = shocked_tenor,
-    curve = shocked_curve,
+    tenor = projected$tenor,
+    curve = projected$curve,
     sigma_JT = sigma_JT,
     Xt = Xt,
     W = W

@@ -11,6 +11,27 @@ Reusable code now lives in `R/` and loads through the package namespace.
 API documentation, numerical validation, and publication examples remain
 work in progress.
 
+Source files in `R/` retain module prefixes to make their responsibilities visible:
+
+| Prefix | Module |
+|---|---|
+| `bl_` | Single-curve baselines, cross-curve features, and MCE fitting |
+| `cr_` | Covariance regression, covariance construction, and related evaluation |
+| `dr_` | Yield-data input, formatting, and reconstruction |
+| `st_` | Stress testing and shock propagation |
+| `dly_` | Diebold-Li-Yue modelling |
+
+Preserve these prefixes when adding or reorganizing scripts. Shared formatting,
+curve-layout, and matrix utilities retain descriptive filenames.
+
+DLY code is organized into `dly_sc.R` (country-curve estimation),
+`dly_static.R` (global decomposition and reconstruction), `dly_dynamics.R`
+(state estimation and propagation), and `dly_fit.R` (fitting orchestration).
+Use `dly_fit()` for a complete fit, `dly_sc_fit_all()` for country fits, and
+`dly_fit_from_sc()` to build a complete fit from those country fits.
+The existing `dly_all_sc()` and `dly_fit_from_single_curve()` names remain
+available as compatibility aliases with the same arguments and results.
+
 ## Installation
 
 From R, install the development branch and its runtime dependencies:

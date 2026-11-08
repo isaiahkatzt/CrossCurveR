@@ -470,6 +470,56 @@ test_that("rolling baseline fitter refits models inside each valuation window", 
   expect_equal(result$DNS$fit[[2]]$fit$start, as.Date("2020-12-31"))
 })
 
+test_that("rolling shocks reuse baselines without changing refit draws or the saved fits", {
+  yields <- make_ladder_yields()
+  windows <- tontine_build_valuation_windows(yields, "usa", 2020:2021, lookback_years = 1)
+  args <- list(yields = yields, valuation_windows = windows, curves = c("usa", "gbr"),
+    mats = c(12, 24), mat_names = c("X01Y", "X02Y"), lambdas = .1,
+    cutoffs = c(1, 1), reference_curve = "usa", include_models = "MCE", fit_seed = 999)
+  calls <- 0L
+
+  with_temp_bindings(list(
+    tontine_fit_mce_baseline_curves = function(yields, ...) {
+      calls <<- calls + 1L
+      list(model = "MCE", curve_panels = yields,
+        fit = list(single_curve_state = list(time = yields$usa$time), draw = stats::rnorm(1)))
+    },
+    tontine_mce_shock_from_baseline_profile = function(baseline_state, ...) {
+      n <- length(baseline_state$single_curve_state$time)
+      list(shocked_curve = data.frame(time = baseline_state$single_curve_state$time,
+        usa.01Y = stats::rnorm(n), usa.02Y = 2, gbr.01Y = 3, gbr.02Y = 4))
+    }
+  ), {
+    baseline <- do.call(tontine_fit_rolling_baseline_curve_models, args)
+    saved <- unserialize(serialize(baseline, NULL))
+    for (year in c(2020, 2019)) {
+      for (magnitude in c(.1, 0)) {
+        shock_args <- c(args, list(shock_spec = list(shock_year = year,
+          shock_curves = "usa", shock_factors = "L", shock_magnitude = magnitude)))
+        expected <- do.call(tontine_fit_rolling_shocked_curve_models, shock_args)
+        expected_rng <- .Random.seed
+        calls_before <- calls
+        set.seed(123)
+        actual <- do.call(tontine_fit_rolling_shocked_curve_models,
+          c(shock_args, list(baseline_curve_models = baseline)))
+        expect_identical(actual, expected)
+        expect_identical(.Random.seed, expected_rng)
+        expect_identical(calls, calls_before)
+        expect_identical(baseline, saved)
+      }
+    }
+    cached_args <- c(shock_args, list(baseline_curve_models = baseline))
+    for (field in c("yields", "valuation_windows", "mce_controls", "fit_seed")) {
+      incompatible <- cached_args
+      incompatible[[field]] <- switch(field,
+        yields = list(usa = transform(yields$usa, X01Y = X01Y + 1), gbr = yields$gbr),
+        valuation_windows = windows[2:1, ], mce_controls = list(CR_maxiter = 3), fit_seed = 1000)
+      expect_error(do.call(tontine_fit_rolling_shocked_curve_models, incompatible),
+                   "same data, windows, settings, and seed")
+    }
+  })
+})
+
 test_that("baseline valuation prices each baseline model and builds cash-account summaries", {
   yields <- make_ladder_yields()
   shocked_yields <- yields

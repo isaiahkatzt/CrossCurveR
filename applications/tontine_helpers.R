@@ -1169,10 +1169,12 @@ tontine_fit_rolling_baseline_curve_models <- function(yields, valuation_windows,
   }
 
   model_results <- list()
+  rng_states <- list()
 
   for (model_name in include_models) {
     window_fits <- vector("list", nrow(valuation_windows))
     purchase_rows <- vector("list", nrow(valuation_windows))
+    window_rng <- vector("list", nrow(valuation_windows))
 
     for (i in seq_len(nrow(valuation_windows))) {
       valuation_window <- valuation_windows[i, , drop = FALSE]
@@ -1185,6 +1187,7 @@ tontine_fit_rolling_baseline_curve_models <- function(yields, valuation_windows,
         set.seed(as.integer(fit_seed) + i)
       }
       window_fit <- fit_one_window(model_name, window_yields)
+      window_rng[i] <- list(get0(".Random.seed", envir = .GlobalEnv, inherits = FALSE))
       window_fits[[i]] <- window_fit
       purchase_rows[[i]] <- tontine_extract_window_curve_rows(
         curve_panels = window_fit$curve_panels,
@@ -1200,8 +1203,17 @@ tontine_fit_rolling_baseline_curve_models <- function(yields, valuation_windows,
       valuation_windows = valuation_windows,
       curve_panels = tontine_bind_purchase_curve_rows(purchase_rows, curves)
     )
+    rng_states[[model_name]] <- window_rng
   }
 
+  # Keep the inputs and post-fit RNG states for reproducible reuse by shock scenarios.
+  attr(model_results, "baseline_context") <- list(
+    inputs = list(yields = yields, valuation_windows = valuation_windows,
+      curves = curves, mats = mats, mat_names = mat_names, lambdas = lambdas,
+      cutoffs = cutoffs, reference_curve = reference_curve,
+      mce_controls = mce_controls, fit_seed = fit_seed),
+    rng_states = rng_states
+  )
   model_results
 }
 
@@ -1449,6 +1461,8 @@ tontine_mce_shock_from_baseline_profile <- function(baseline_state, shock_spec,
   )
 }
 
+# Supply rolling baselines from the same inputs to avoid fitting them again.
+# Without a fit_seed, reuse shares the realized fits and their saved RNG continuation.
 tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
                                                      curves, mats, mat_names,
                                                      lambdas, cutoffs,
@@ -1460,7 +1474,8 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
                                                        "DNS", "DLY",
                                                        "MCE"
                                                      ),
-                                                     fit_seed = NULL) {
+                                                     fit_seed = NULL,
+                                                     baseline_curve_models = NULL) {
   is_decay_shock <- tontine_is_decay_shock(shock_spec)
   if (!is_decay_shock && is.null(shock_spec$shock_year)) {
     stop("`shock_spec` must contain `shock_year`.")
@@ -1468,6 +1483,18 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
 
   if (!is.null(shock_spec$shock_window)) {
     stop("Application shocks now use row-wise profiles; `shock_window` is no longer supported here.")
+  }
+
+  if (!is.null(baseline_curve_models)) {
+    baseline_context <- attr(baseline_curve_models, "baseline_context")
+    inputs <- list(yields = yields, valuation_windows = valuation_windows,
+      curves = curves, mats = mats, mat_names = mat_names, lambdas = lambdas,
+      cutoffs = cutoffs, reference_curve = reference_curve,
+      mce_controls = mce_controls, fit_seed = fit_seed)
+    if (!identical(baseline_context$inputs, inputs) ||
+        !all(include_models %in% names(baseline_curve_models))) {
+      stop("`baseline_curve_models` must be rolling baselines fitted with the same data, windows, settings, and seed.")
+    }
   }
 
   shock_type <- if (is.null(shock_spec$shock_type)) "additive" else shock_spec$shock_type
@@ -1536,11 +1563,7 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
     )
   }
 
-  fit_one_window <- function(model_name, window_yields, valuation_window, window_index) {
-    if (!is.null(fit_seed)) {
-      set.seed(as.integer(fit_seed) + window_index)
-    }
-
+  fit_one_window <- function(model_name, valuation_window, window_index) {
     shock_this_window <- if (is_decay_shock) {
       valuation_window$estimation_end[[1]] >= decay_dates$start_date &&
         valuation_window$estimation_start[[1]] <= decay_dates$end_date
@@ -1550,20 +1573,40 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
     if (model_name == "Observed") {
       stop("Observed curves are not shocked in the tontine shock applications.")
     }
+    if (!model_name %in% c("DNS", "DLY", "MCE")) {
+      stop(sprintf("Unsupported baseline model `%s`.", model_name))
+    }
 
-    if (model_name == "DNS") {
-      dns_fit <- tontine_fit_dns_baseline_curves(
+    if (is.null(baseline_curve_models)) {
+      window_yields <- tontine_slice_yields_for_window(yields, valuation_window, curves)
+      if (!is.null(fit_seed)) {
+        set.seed(as.integer(fit_seed) + window_index)
+      }
+      window_fit <- tontine_fit_baseline_curve_models(
         yields = window_yields,
         curves = curves,
         mats = mats,
         mat_names = mat_names,
         lambdas = lambdas,
-        cutoffs = cutoffs
-      )
-      if (!shock_this_window) {
-        return(dns_fit)
+        cutoffs = cutoffs,
+        reference_curve = reference_curve,
+        mce_controls = mce_controls,
+        include_models = model_name
+      )[[model_name]]
+    } else {
+      window_fit <- baseline_curve_models[[model_name]]$fit[[window_index]]
+      # Continue at the same random draw as a freshly fitted baseline, including refits.
+      rng_state <- baseline_context$rng_states[[model_name]][[window_index]]
+      if (!is.null(rng_state)) {
+        assign(".Random.seed", rng_state, envir = .GlobalEnv)
       }
+    }
+    if (!shock_this_window) {
+      return(window_fit)
+    }
 
+    if (model_name == "DNS") {
+      dns_fit <- window_fit
       shock_profile <- build_window_shock_profile(dns_fit$fit$time, valuation_window)
       if (tontine_uses_average_level_fraction_shock(shock_spec)) {
         shock_profile <- tontine_resolve_average_level_shock_profile(
@@ -1606,17 +1649,7 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
     }
 
     if (model_name == "DLY") {
-      dly_fit_obj <- tontine_fit_dly_baseline_curves(
-        yields = window_yields,
-        curves = curves,
-        mats = mats,
-        mat_names = mat_names,
-        lambdas = lambdas,
-        reference_curve = reference_curve
-      )
-      if (!shock_this_window) {
-        return(dly_fit_obj)
-      }
+      dly_fit_obj <- window_fit
 
       shock_profile <- build_window_shock_profile(
         dly_fit_obj$fit$single_curve[[curves[[1]]]]$time,
@@ -1660,19 +1693,7 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
     }
 
     if (model_name == "MCE") {
-      mce_fit_obj <- tontine_fit_mce_baseline_curves(
-        yields = window_yields,
-        curves = curves,
-        mats = mats,
-        mat_names = mat_names,
-        lambdas = lambdas,
-        cutoffs = cutoffs,
-        reference_curve = reference_curve,
-        controls = mce_controls
-      )
-      if (!shock_this_window) {
-        return(mce_fit_obj)
-      }
+      mce_fit_obj <- window_fit
 
       shock_profile <- build_window_shock_profile(
         mce_fit_obj$fit$single_curve_state$time,
@@ -1697,8 +1718,6 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
       mce_fit_obj$shock_fit <- mce_shock
       return(mce_fit_obj)
     }
-
-    stop(sprintf("Unsupported baseline model `%s`.", model_name))
   }
 
   model_results <- list()
@@ -1709,12 +1728,7 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
 
     for (i in seq_len(nrow(valuation_windows))) {
       valuation_window <- valuation_windows[i, , drop = FALSE]
-      window_yields <- tontine_slice_yields_for_window(
-        yields = yields,
-        valuation_window = valuation_window,
-        curves = curves
-      )
-      window_fit <- fit_one_window(model_name, window_yields, valuation_window, i)
+      window_fit <- fit_one_window(model_name, valuation_window, i)
       window_fits[[i]] <- window_fit
       purchase_rows[[i]] <- tontine_extract_window_curve_rows(
         curve_panels = window_fit$curve_panels,
