@@ -100,20 +100,15 @@ st_build_xt_state <- function(bl_yields, curves, reference, reuse_ECM = TRUE, ba
       X_trunc = X_trunc
     )
   } else {
-    cc_ci_features <- blcc_cointegration(
-      blsc_list = bl_yields,
-      curves = curves,
-      reference = reference,
-      estim = ECM_estim,
-      type = ECM_type,
-      alpha = ECM_alpha,
-      normalize = X_normalize
-    )
+    cc_ci_features <- NULL
     xt_state <- tryCatch(
-      list(
-        Xt = blcc_build_Xt(cc_ci_features$cc_cspread, cc_ci_features$cc_ecm, trunc = X_trunc),
-        cc_ci_features = cc_ci_features
-      ),
+      {
+        cc_ci_features <- blcc_cointegration(
+          blsc_list = bl_yields, curves = curves, reference = reference,
+          estim = ECM_estim, type = ECM_type, alpha = ECM_alpha, normalize = X_normalize)
+        list(Xt = blcc_build_Xt(cc_ci_features$cc_cspread, cc_ci_features$cc_ecm, trunc = X_trunc),
+             cc_ci_features = cc_ci_features)
+      },
       error = function(e) {
         if (ECM_fallback != "baseline" || is.null(baseline_ecm)) {
           stop(e)
@@ -808,6 +803,7 @@ st_validate_baseline_state <- function(baseline_state, curves = NULL, mats = NUL
     stop("Cached single-curve time index does not match its yields.", call. = FALSE)
   }
   X <- .cc_features(baseline_state$xt_state$Xt, time)
+  .st_check_cached_coefficients(baseline_state$BS0, X, baseline_state$curves, baseline_state$mats)
   spec <- baseline_state$input_spec
   if (!is.null(spec) &&
       (!identical(spec$curves, baseline_state$curves) ||
@@ -815,6 +811,11 @@ st_validate_baseline_state <- function(baseline_state, curves = NULL, mats = NUL
        !identical(.cc_index(spec$time), .cc_index(time)) ||
        !identical(spec$features$columns, colnames(X)) || spec$features$count != ncol(X))) {
     stop("Cached baseline inputs no longer match its stored input specification.", call. = FALSE)
+  }
+  stored_features <- spec$features$preprocessing
+  if (!is.null(stored_features) && !isTRUE(all.equal(
+      stored_features, baseline_state$xt_state$feature_spec, tolerance = 0))) {
+    stop("Cached feature transformations no longer match the stored input specification.", call. = FALSE)
   }
 
   baseline_state
@@ -1071,7 +1072,11 @@ mc_fit_shock_from_baseline <- function(baseline_state,
     shocked_tenor = shocked_fit_state$tenor,
     shocked_curve = shocked_fit_state$curve,
     shocked_single_curve_state = shocked_state,
-    baseline_state = baseline_state
+    baseline_state = baseline_state,
+    BS0 = shocked_BS0,
+    xt_state = shocked_xt_state,
+    input_spec = .cc_input_spec(shocked_state$yields, baseline_state$mats,
+      baseline_state$curves, shocked_Xt, shocked_xt_state$feature_spec)
   ))
 }
 
@@ -1151,6 +1156,9 @@ mc_fit_shock <- function(yields = NULL, lambdas = NULL, cutoffs = NULL, referenc
                          CR_check_every = 1, CR_use_loglik = TRUE, CR_store_path = TRUE,
                          CR_verb = FALSE, CR_term = TRUE,
                          curves = NULL, mats = NULL, baseline_state = NULL) {
+  control_names <- intersect(names(formals(mc_fit_shock_baseline)),
+                             names(formals(mc_fit_shock_from_baseline)))
+  supplied_controls <- intersect(names(match.call())[-1], control_names)
   ECM_fallback <- match.arg(ECM_fallback)
 
   if (is.null(baseline_state)) {
@@ -1201,9 +1209,26 @@ mc_fit_shock <- function(yields = NULL, lambdas = NULL, cutoffs = NULL, referenc
       mats = mats,
       reference = reference
     )
+    for (name in c("lambdas", "cutoffs")) {
+      value <- get(name, inherits = FALSE)
+      if (!is.null(value) && !isTRUE(all.equal(value, baseline_state$config[[name]],
+                                              tolerance = 0, check.attributes = FALSE))) {
+        stop("Supplied `", name, "` does not match the cached baseline. Build a new baseline to change it.",
+             call. = FALSE)
+      }
+    }
+    if (!is.null(yields)) {
+      yields <- .cc_yields(yields, baseline_state$mats, baseline_state$curves)
+      saved <- baseline_state$single_curve_state$yields
+      same <- identical(.cc_index(yields[[1]][[1]]), .cc_index(saved[[1]][[1]])) &&
+        all(vapply(baseline_state$curves, function(curve) isTRUE(all.equal(
+          as.matrix(yields[[curve]][-1]), as.matrix(saved[[curve]][-1]),
+          tolerance = 0, check.attributes = FALSE)), logical(1)))
+      if (!same) stop("Supplied yields do not match the cached baseline. Build a new baseline.", call. = FALSE)
+    }
   }
 
-  mc_fit_shock_from_baseline(
+  args <- list(
     baseline_state = baseline_state,
     shock_curves = shock_curves,
     shock_factors = shock_factors,
@@ -1213,30 +1238,10 @@ mc_fit_shock <- function(yields = NULL, lambdas = NULL, cutoffs = NULL, referenc
     shock_window_position = shock_window_position,
     reuse_BS0 = reuse_BS0,
     reuse_ECM = reuse_ECM,
-    ECM_estim = ECM_estim,
-    ECM_type = ECM_type,
-    ECM_alpha = ECM_alpha,
-    ECM_fallback = ECM_fallback,
-    X_normalize = X_normalize,
-    X_trunc = X_trunc,
-    CR_algo = CR_algo,
-    CR_init = CR_init,
-    Xt_smooth = Xt_smooth,
-    smoother = smoother,
-    knot_count = knot_count,
-    k_count = k_count,
-    k_pass = k_pass,
-    hp_lambda = hp_lambda,
-    henderson_k = henderson_k,
-    CR_maxiter = CR_maxiter,
-    CR_tol = CR_tol,
-    CR_Binit = CR_Binit,
-    CR_S0init = CR_S0init,
-    CR_S0_shrink_diag = CR_S0_shrink_diag,
-    CR_check_every = CR_check_every,
-    CR_use_loglik = CR_use_loglik,
-    CR_store_path = CR_store_path,
-    CR_verb = CR_verb,
-    CR_term = CR_term
+    ECM_fallback = ECM_fallback
   )
+  # Omitted controls inherit the cache, including when its settings differ
+  # from this convenience wrapper's defaults. Fresh fits inherit their new cache.
+  args <- c(args, mget(supplied_controls, envir = environment(), inherits = FALSE))
+  do.call(mc_fit_shock_from_baseline, args)
 }

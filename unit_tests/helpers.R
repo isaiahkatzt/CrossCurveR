@@ -4,6 +4,7 @@ withr::local_envvar(c(LC_ALL = NA), .local_envir = testthat::teardown_env())
 tol <- 1e-6
 repo_root <- dirname(normalizePath(testthat::test_path()))
 source(file.path(repo_root, "applications", "tontine_helpers.R"), local = TRUE)
+source(file.path(repo_root, "tests", "testthat", "helper-feature-reuse.R"), local = TRUE)
 
 with_temp_bindings <- function(bindings, expr, env = environment(tontine_fit_baseline_curve_models)) {
   expr <- substitute(expr)

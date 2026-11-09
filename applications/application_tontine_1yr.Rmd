@@ -51,7 +51,7 @@ lookback_years <- 1
 lambdas <- seq(0.01, 0.15, by = 0.005)
 cutoffs <- c(4, 8)
 fit_seed <- 999
-event_seed <- 999
+event_seed <- 20260430
 
 mce_baseline_controls <- list(
   ECM_alpha = 0.2,

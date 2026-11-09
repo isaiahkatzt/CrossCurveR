@@ -1457,7 +1457,9 @@ tontine_mce_shock_from_baseline_profile <- function(baseline_state, shock_spec,
     shocked_tenor = shocked_fit_state$tenor,
     shocked_curve = shocked_fit_state$curve,
     shocked_single_curve_state = shocked_state,
-    baseline_state = baseline_state
+    baseline_state = baseline_state,
+    BS0 = shocked_BS0,
+    xt_state = shocked_xt_state
   )
 }
 

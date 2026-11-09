@@ -1,5 +1,7 @@
 # CrossCurveR (development version)
 
+- Restore the pre-correction EM covariance-inverse ridge and likelihood-scoring convention, and the one-year tontine event seed (20260430), while retaining validation checks.
+- Revert baseline-relative centering/scaling and mandatory feature-transform freezing in MCE stress scenarios; restore independent ECM/covariance conditioning and scenario feature controls. Retain cached-control inheritance, coefficient-layout checks, scenario coefficient/feature metadata, and the requested ECM fallback. This restores the preceding application estimation convention rather than resolving other paper/code differences.
 - Validate estimation input identities, finite values, observation alignment, maturity grids and fixed decay parameters; match named inputs without relabelling curves, changing samples or converting units. Record input and feature-transformation specifications while preserving existing notebook calculations.
 - Split DLY estimation, static decomposition, dynamics, and fitting orchestration into four modules; shorten function names while retaining existing names as compatibility aliases and preserving fitting behavior and notebook outputs.
 - Add initial package metadata, README, citation, and build-ignore skeletons.
@@ -10,7 +12,6 @@
 - Normalize maturity labels before reconstruction and reject invalid or duplicate tenors.
 - Add `dr_read_yields()` for validated CSV input without automatic header repair.
 - Resolve `zero_mean_covreg()` initialization choices so the default uses adaptive initialization.
-- Apply the covariance ridge once so regularized E-steps and likelihoods use the returned covariance.
 - Handle scalar covariance square roots, reject material asymmetry or negative eigenvalues, and require numerically invertible covariances for whitening.
 - Reject invalid iteration counts, checking intervals, and convergence tolerances before regularized covariance fitting.
 - Move the production EM estimator into the core covariance-estimation module without changing its implementation or interface.

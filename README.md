@@ -100,8 +100,26 @@ and `X_normalize` are inactive compatibility arguments.
 
 Complete fits add `input_spec` metadata describing dates, curve and maturity
 order, units, decay choices, and feature layout. Endogenous fits also record the feature basis,
-centering, scaling, and smoothing actually used. Existing numerical outputs and
-normalization choices are preserved. See `?estimation_inputs` for the full contract.
+centering, scaling, and smoothing actually used. See `?estimation_inputs` for the full contract.
+
+## Cached MCE scenarios
+
+When `baseline_state` is supplied to `mc_fit_shock()`, omitted fitting controls
+inherit the saved configuration. Fresh calls retain the ordinary fitting defaults.
+Explicit baseline-only inputs must match the cache.
+
+`reuse_BS0` and `reuse_ECM` independently control conditioning on baseline
+covariance-regression coefficients and cointegration estimates. Re-estimating
+the ECM while retaining covariance coefficients is supported when the resulting
+feature columns can be aligned with the fitted design. Feature normalization,
+selection, and smoothing remain scenario controls. With `X_normalize = TRUE`,
+spreads are centered and scaled within the scenario sample, preserving the
+pre-existing application convention. This sample standardization is separate
+from identification of the cointegration basis.
+
+Returned `BS0` and `xt_state` identify the actual coefficient/feature pair.
+Baseline-relative centering/scaling and the associated restrictions introduced
+in the recent feature-reuse pass have been reverted. See `?feature_reuse`.
 
 ## Yield data input
 

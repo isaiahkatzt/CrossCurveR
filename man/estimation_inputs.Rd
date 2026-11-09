@@ -62,8 +62,11 @@ inactive compatibility arguments.
 Complete fits record an \code{input_spec} containing the observation index,
 curve and maturity order, declared units, decay choices and feature layout. Endogenous fitting
 also records the feature bases, centering, scaling and smoothing specification.
-These describe transformations actually used; they do not change scenario
-normalization or make re-estimated bases interchangeable with frozen coefficients.
+These describe transformations actually used. Scenario standardization uses
+scenario-sample means and standard deviations. ECM and covariance-regression
+conditioning remain independently selectable; feature-column alignment checks
+do not establish statistical equivalence between different feature bases.
+See \code{\link{feature_reuse}}.
 Precomputed DLY inputs must satisfy the same alignment and matrix-layout checks.
 }
 \seealso{\code{\link{dly_fit}}, \code{\link{dr_read_yields}}}

@@ -23,7 +23,9 @@ make_fake_shock_baseline <- function() {
         cc_ecm = list(gbr = list(rank = 1, Gmatrix = matrix(1, nrow = 1, ncol = 1)))
       )
     ),
-    BS0 = list(X01M = list(S0 = Matrix::diag(2), B = matrix(1, nrow = 2, ncol = 1))),
+    BS0 = stats::setNames(rep(list(list(S0 = Matrix::diag(2),
+      B = matrix(1, nrow = 2, ncol = 1))), length(fixture_mats)),
+      paste0("X", vapply(fixture_mats, numeric_to_matname, character(1)))),
     baseline_fit = list(
       tenor = data.frame(time = fixture_time, value = seq_along(fixture_time)),
       curve = data.frame(time = fixture_time, value = seq_along(fixture_time))

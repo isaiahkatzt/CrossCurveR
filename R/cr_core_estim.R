@@ -17,11 +17,14 @@
 }
 
 # Shared numerical operations.
-.cr_inverse <- function(A) {
-  # Covariance and design matrices already include their intended ridge.
-  cholA <- tryCatch(chol(A), error = function(e) NULL)
+.cr_inverse <- function(A, ridge = 0) {
+  A2 <- A
+  if (ridge > 0) {
+    A2 <- A2 + Matrix::diag(ridge, nrow(A2))
+  }
+  cholA <- tryCatch(chol(A2), error = function(e) NULL)
   if (is.null(cholA)) {
-    Matrix::solve(A)
+    Matrix::solve(A2)
   } else {
     chol2inv(cholA)
   }
@@ -43,10 +46,12 @@
   S0 + Matrix::tcrossprod(Bx)
 }
 
-.cr_loglik <- function(W, X, B, S0) {
+.cr_loglik <- function(W, X, B, S0, ridge_S0 = 0) {
   N <- nrow(W)
   P <- ncol(W)
-  iS0 <- .cr_inverse(S0)
+  # Preserve the historical score: the inverse has an additional covariance
+  # ridge, while the determinant uses stored S0. Changing this alters fitting.
+  iS0 <- .cr_inverse(S0, ridge = ridge_S0)
   logdet_S0 <- as.numeric(determinant(S0, logarithm = TRUE)$modulus)
 
   ll <- 0
@@ -127,7 +132,7 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
     B_path[[1]] <- B
     S0_path[[1]] <- S0
     if (use_loglik) {
-      ll_path[1] <- .cr_loglik(W, X, B, S0)
+      ll_path[1] <- .cr_loglik(W, X, B, S0, ridge_S0)
     }
   } else {
     B_path <- S0_path <- ll_path <- NULL
@@ -143,7 +148,8 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
     B_old <- B
     S0_old <- S0
 
-    iS0 <- .cr_inverse(S0)
+    # Preserve the pre-correction inversion ridge in addition to stored S0's ridge.
+    iS0 <- .cr_inverse(S0, ridge = ridge_S0)
 
     # E step
     XtB <- X %*% Matrix::t(B)  # N x P
@@ -175,7 +181,7 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
 
     ll_now <- NA_real_
     if (use_loglik) {
-      ll_now <- .cr_loglik(W, X, B, S0)
+      ll_now <- .cr_loglik(W, X, B, S0, ridge_S0)
     }
 
     if (store_path) {
@@ -336,7 +342,7 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
 
   Psi <- if (is.null(S0)) stats::cov(W) else as.matrix(S0)
   Psi <- .cr_regularize(Psi, S0_shrink_diag, ridge_S0)
-  iPsi <- .cr_inverse(Psi)
+  iPsi <- .cr_inverse(Psi, ridge = ridge_S0)
 
   if (is.null(B)) {
     if (init == "static") {
@@ -365,7 +371,7 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
     B_path[[1]] <- B
     S0_path[[1]] <- Psi
     if (use_loglik) {
-      ll_path[1] <- .cr_loglik(W, X, B, Psi)
+      ll_path[1] <- .cr_loglik(W, X, B, Psi, ridge_S0)
     }
   } else {
     B_path <- S0_path <- ll_path <- NULL
@@ -398,7 +404,7 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
     dB <- Matrix::norm(B - B_old, type = "F")
     ll_now <- NA_real_
     if (use_loglik) {
-      ll_now <- .cr_loglik(W, X, B, Psi)
+      ll_now <- .cr_loglik(W, X, B, Psi, ridge_S0)
     }
 
     if (store_path) {
