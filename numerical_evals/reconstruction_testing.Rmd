@@ -8,6 +8,15 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 
 library(CrossCurveR)
+
+# Repository diagnostics deliberately examine private package calculations.
+private_helpers <- c(
+  "bl_phi", "bl_NSbetas", "lambda_grid_search", "sc_NSdaily",
+  "sc_NSwindow"
+)
+list2env(setNames(lapply(private_helpers, utils::getFromNamespace,
+                        ns = "CrossCurveR"), private_helpers), envir = environment())
+rm(private_helpers)
 library(microbenchmark)
 
 

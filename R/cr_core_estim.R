@@ -16,6 +16,43 @@
   }
 }
 
+.cr_warn_nonconvergence <- function(estimator, iter, max_iter, tol, dimensions,
+                                    changes, check_every, last_check, criterion,
+                                    loglik = NULL, loglik_change = NULL, note = NULL) {
+  details <- c(
+    sprintf("iter=%d, tol=%.3e", iter, tol),
+    paste(sprintf("%s=%d", names(dimensions), dimensions), collapse = ", "),
+    sprintf("check_every=%d, last_check=%d", check_every, last_check),
+    sprintf("criterion=%s", criterion),
+    sprintf("%s=%.3e", names(changes), changes)
+  )
+  if (!is.null(loglik)) details <- c(details, sprintf("final_score=%.6g", loglik))
+  if (!is.null(loglik_change)) {
+    details <- c(details, sprintf("absolute_score_change=%.3e", loglik_change))
+    if (!is.finite(loglik_change)) details <- c(details, "likelihood score change is nonfinite")
+  }
+  if (!is.null(loglik) && !is.finite(loglik)) {
+    details <- c(details, "likelihood score is nonfinite")
+  }
+  if (last_check == 0) {
+    details <- c(details, "no convergence check was performed")
+  } else if (last_check < iter) {
+    details <- c(details, "iteration limit fell between convergence checks")
+  }
+  details <- c(details, note)
+  message <- sprintf(
+    "%s reached max_iter=%d without confirmed convergence (%s). Returning final estimates.",
+    estimator, max_iter, paste(details, collapse = "; ")
+  )
+  warning(structure(list(
+    message = message, call = NULL, estimator = estimator,
+    iter = iter, max_iter = max_iter, tol = tol, dimensions = dimensions,
+    parameter_changes = changes, check_every = check_every, last_check = last_check,
+    criterion = criterion, loglik = loglik, loglik_change = loglik_change,
+    note = note
+  ), class = c("crosscurver_nonconvergence", "warning", "condition")))
+}
+
 # Shared numerical operations.
 .cr_inverse <- function(A, ridge = 0) {
   A2 <- A
@@ -90,11 +127,13 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
   Q <- ncol(X)
 
   if (N < 2) {
-    stop("Need at least two observations.")
+    stop("Covariance regression: at least two observations are required; received ", N, ".", call. = FALSE)
   }
 
   if (qr(X)$rank < Q) {
-    stop("X is rank deficient. Remove collinear columns or regularize more heavily.")
+    stop("X is rank deficient under the current numerical tolerance. ",
+         "This estimator requires full-column-rank X before applying ridge stabilization. ",
+         "Remove or explicitly reparameterize redundant columns; increasing `ridge_X` will not bypass this check.")
   }
 
   # initialization
@@ -209,7 +248,7 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
       if (use_loglik && store_path && iter >= 1) {
         ll_prev <- ll_path[iter]
         if (is.finite(ll_now) && is.finite(ll_prev)) {
-          if (abs(ll_now - ll_prev) < tol && dB < sqrt(tol) && dS < sqrt(tol)) {
+          if (abs(ll_now - ll_prev) < tol && dB < tol && dS < tol) {
             converged <- TRUE
             break
           }
@@ -242,6 +281,16 @@ zero_mean_covreg_em <- function(W, X, init = c("adaptive", "static"), max_iter =
     if (use_loglik) {
       out$loglik_path <- ll_path[seq_len(iter + 1)]
     }
+  }
+
+  if (!converged) {
+    .cr_warn_nonconvergence(
+      "zero_mean_covreg_em", iter, max_iter, tol, c(N = N, P = P, Q = Q),
+      c(dB = dB, dS0 = dS), check_every, (iter %/% check_every) * check_every,
+      if (use_loglik && store_path) "parameter and likelihood changes" else "parameter changes",
+      loglik = if (use_loglik) ll_now else NULL,
+      loglik_change = if (use_loglik && store_path) abs(ll_now - ll_path[iter]) else NULL
+    )
   }
 
   return(out)
@@ -277,6 +326,8 @@ zero_mean_covreg <- function(W, X, init = c("adaptive", "static"), max_iter = 10
 
   iS0 <- Matrix::solve(S0)
   iter <- 0
+  converged <- FALSE
+  mz <- vz <- sz <- NULL
 
   b_est[[1]] <- B; s_est[[1]] <- S0
 
@@ -307,10 +358,37 @@ zero_mean_covreg <- function(W, X, init = c("adaptive", "static"), max_iter = 10
         bnorm <- Matrix::norm(b_est[[iter]] - b_est[[iter-9]], type = 'F')
         snorm <- Matrix::norm(s_est[[iter]] - s_est[[iter-9]], type = 'F')
       }
-      if (bnorm < tol & snorm < tol) {return(list(S0=S0, B=B, b_est=b_est, s_est=s_est, iter=iter, S0_shrink_diag=S0_shrink_diag, input_spec=.cc_cov_spec(W, X)))}
+      if (bnorm < tol & snorm < tol) {
+        converged <- TRUE
+        break
+      }
     }
   }
-  return(list(S0=S0, B=B, b_est=b_est, s_est=s_est, S0_shrink_diag=S0_shrink_diag, input_spec=.cc_cov_spec(W, X)))
+  if (!converged && iter > 0 && iter >= max_iter) {
+    last_check <- if (term) (iter %/% 10) * 10 else 0
+    changes <- if (term) {
+      if (last_check > 0) c(dB = bnorm, dS0 = snorm) else numeric()
+    } else {
+      c(dB = Matrix::norm(B - b_est[[iter]], "F"),
+        dS0 = Matrix::norm(S0 - s_est[[iter]], "F"))
+    }
+    .cr_warn_nonconvergence(
+      "zero_mean_covreg", iter, max_iter, tol, c(N = N, P = P, Q = Q),
+      changes, 10, last_check,
+      if (term) "legacy history comparison" else "not assessed (term=FALSE)",
+      note = if (term && last_check > 0) {
+        "dB and dS0 are from the last scheduled legacy history comparison"
+      } else NULL
+    )
+  }
+  list(
+    B = B, S0 = S0, mz = mz, vz = vz, sz = sz,
+    iter = iter, converged = converged, loglik = NULL,
+    S0_shrink_diag = S0_shrink_diag, input_spec = .cc_cov_spec(W, X),
+    B_path = b_est[seq_len(iter + 1)], S0_path = s_est[seq_len(iter + 1)],
+    b_est = b_est, s_est = s_est,
+    termination_reason = if (converged) "converged" else if (!term) "not_assessed" else "max_iter"
+  )
 }
 
 covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter = 500, tol = 1e-8,
@@ -333,11 +411,13 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
   Q <- ncol(X)
 
   if (N < 2) {
-    stop("Need at least two observations.")
+    stop("Covariance regression: at least two observations are required; received ", N, ".", call. = FALSE)
   }
 
   if (qr(X)$rank < Q) {
-    stop("X is rank deficient. Remove collinear columns or regularize more heavily.")
+    stop("X is rank deficient under the current numerical tolerance. ",
+         "This estimator requires full-column-rank X before applying ridge stabilization. ",
+         "Remove or explicitly reparameterize redundant columns; increasing `ridge_X` will not bypass this check.")
   }
 
   Psi <- if (is.null(S0)) stats::cov(W) else as.matrix(S0)
@@ -425,7 +505,7 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
       if (use_loglik && store_path && iter >= 1) {
         ll_prev <- ll_path[iter]
         if (is.finite(ll_now) && is.finite(ll_prev)) {
-          if (abs(ll_now - ll_prev) < tol && dB < sqrt(tol)) {
+          if (abs(ll_now - ll_prev) < tol && dB < tol) {
             converged <- TRUE
             break
           }
@@ -462,9 +542,15 @@ covreg_comp_estimator <- function(W, X, init = c("adaptive", "static"), max_iter
     }
   }
 
-  return(out)
-}
+  if (!converged) {
+    .cr_warn_nonconvergence(
+      "covreg_comp_estimator", iter, max_iter, tol, c(N = N, P = P, Q = Q),
+      c(dB = dB), check_every, (iter %/% check_every) * check_every,
+      if (use_loglik && store_path) "parameter and likelihood changes" else "parameter changes",
+      loglik = if (use_loglik) ll_now else NULL,
+      loglik_change = if (use_loglik && store_path) abs(ll_now - ll_path[iter]) else NULL
+    )
+  }
 
-dynamic_mean_covreg <- function() {
-  ## TO WRITE
+  return(out)
 }

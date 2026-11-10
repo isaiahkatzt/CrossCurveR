@@ -347,7 +347,9 @@ tontine_sample_withdrawal_ids <- function(state, withdrawal_intensity,
     return(integer())
   }
 
-  as.integer(sample(eligible_member_ids, size = withdrawal_count, replace = FALSE))
+  as.integer(eligible_member_ids[
+    sample.int(length(eligible_member_ids), size = withdrawal_count, replace = FALSE)
+  ])
 }
 
 tontine_sample_withdrawal_ids_from_integrated_intensity <- function(state,
@@ -389,7 +391,9 @@ tontine_sample_withdrawal_ids_from_integrated_intensity <- function(state,
   withdrawal_member_ids <- if (withdrawal_count == 0) {
     integer()
   } else {
-    as.integer(sample(eligible_member_ids, size = withdrawal_count, replace = FALSE))
+    as.integer(eligible_member_ids[
+      sample.int(length(eligible_member_ids), size = withdrawal_count, replace = FALSE)
+    ])
   }
 
   list(

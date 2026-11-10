@@ -3,7 +3,11 @@
 #############################################
 
 tontine_mat_names <- function(mats) {
-  paste0("X", unname(vapply(mats, numeric_to_matname, character(1))))
+  paste0("X", unname(vapply(mats, function(maturity) {
+    unit <- if (maturity < 12) "M" else "Y"
+    amount <- if (maturity < 12) maturity else maturity / 12
+    paste0(if (amount < 10) "0" else "", as.character(amount), unit)
+  }, character(1))))
 }
 
 tontine_read_yields <- function(curve_files, data_dir = here::here("reconstructed_data"),
@@ -110,7 +114,7 @@ tontine_validate_bond_maturity_years <- function(bond_maturity_years) {
 }
 
 tontine_bond_tenor_col <- function(bond_maturity_years) {
-  paste0("X", numeric_to_matname(tontine_validate_bond_maturity_years(bond_maturity_years) * 12L))
+  tontine_mat_names(tontine_validate_bond_maturity_years(bond_maturity_years) * 12L)
 }
 
 tontine_build_valuation_windows <- function(yields, reference_curve, purchase_years,
@@ -896,13 +900,13 @@ tontine_observed_curve_panels <- function(yields, curves, mat_names) {
 
 tontine_fit_dns_baseline_curves <- function(yields, curves, mats, mat_names,
                                             lambdas, cutoffs) {
-  dns_fit <- st_prepare_single_curve_state(
+  dns_fit <- sc_fit_shock(
     yields = yields,
     lambdas = lambdas,
     cutoffs = cutoffs,
     curves = curves,
     mats = mats
-  )
+  )$baseline_state
 
   curve_panels <- setNames(lapply(curves, function(curve_name) {
     tontine_curve_fit_to_panel(
@@ -1352,8 +1356,6 @@ tontine_mce_shock_from_baseline_profile <- function(baseline_state, shock_spec,
                                                     shock_type = c("additive", "multiplicative"),
                                                     controls = list()) {
   shock_type <- match.arg(shock_type)
-  baseline_state <- st_validate_baseline_state(baseline_state)
-  config <- baseline_state$config
   single_curve_state <- baseline_state$single_curve_state
 
   get_control <- function(name, default) {
@@ -1382,85 +1384,12 @@ tontine_mce_shock_from_baseline_profile <- function(baseline_state, shock_spec,
     shock_type = shock_type
   )
 
-  shocked_state <- st_build_shocked_curve_state(
-    single_curve_state = single_curve_state,
-    shocked_factors = shock_fit$shocked_factors
+  fit <- mc_fit_shocked(
+    baseline_state, shock_fit$shocked_factors, reuse_BS0, reuse_ECM, ECM_fallback, controls
   )
-
-  shocked_xt_state <- st_build_xt_state(
-    bl_yields = shocked_state$bl_yields,
-    curves = baseline_state$curves,
-    reference = baseline_state$reference,
-    reuse_ECM = reuse_ECM,
-    baseline_ecm = baseline_state$xt_state$cc_ci_features$cc_ecm,
-    ECM_estim = st_resolve_config(get_control("ECM_estim", NULL), config$ECM_estim),
-    ECM_type = st_resolve_config(get_control("ECM_type", NULL), config$ECM_type),
-    ECM_alpha = st_resolve_config(get_control("ECM_alpha", NULL), config$ECM_alpha),
-    ECM_fallback = ECM_fallback,
-    X_normalize = st_resolve_config(get_control("X_normalize", NULL), config$X_normalize),
-    X_trunc = st_resolve_config(get_control("X_trunc", NULL), config$X_trunc),
-    Xt_smooth = st_resolve_config(get_control("Xt_smooth", NULL), config$Xt_smooth),
-    smoother = st_resolve_config(get_control("smoother", NULL), config$smoother),
-    knot_count = st_resolve_config(get_control("knot_count", NULL), config$knot_count),
-    k_count = st_resolve_config(get_control("k_count", NULL), config$k_count),
-    k_pass = st_resolve_config(get_control("k_pass", NULL), config$k_pass),
-    hp_lambda = st_resolve_config(get_control("hp_lambda", NULL), config$hp_lambda),
-    henderson_k = st_resolve_config(get_control("henderson_k", NULL), config$henderson_k),
-    ytime = single_curve_state$time
-  )
-
-  if (reuse_BS0) {
-    shocked_Xt <- st_align_Xt_to_baseline(shocked_xt_state$Xt, baseline_state$xt_state$Xt)
-    shocked_BS0 <- baseline_state$BS0
-  } else {
-    shocked_Xt <- shocked_xt_state$Xt
-    shocked_BS0 <- blcc_fe(
-      Xt = shocked_Xt,
-      Wt = shocked_state$W,
-      mats = baseline_state$mats,
-      covreg = st_resolve_config(get_control("CR_algo", NULL), config$CR_algo),
-      init = st_resolve_config(get_control("CR_init", NULL), config$CR_init),
-      max_iter = st_resolve_config(get_control("CR_maxiter", NULL), config$CR_maxiter),
-      tol = st_resolve_config(get_control("CR_tol", NULL), config$CR_tol),
-      S0 = st_resolve_config(get_control("CR_S0init", NULL), config$CR_S0init),
-      B = st_resolve_config(get_control("CR_Binit", NULL), config$CR_Binit),
-      S0_shrink_diag = st_resolve_config(get_control("CR_S0_shrink_diag", NULL), config$CR_S0_shrink_diag),
-      check_every = st_resolve_config(get_control("CR_check_every", NULL), config$CR_check_every),
-      use_loglik = st_resolve_config(get_control("CR_use_loglik", NULL), config$CR_use_loglik),
-      store_path = st_resolve_config(get_control("CR_store_path", NULL), config$CR_store_path),
-      verb = st_resolve_config(get_control("CR_verb", NULL), config$CR_verb),
-      term = st_resolve_config(get_control("CR_term", NULL), config$CR_term)
-    )
-  }
-
-  shocked_fit_state <- st_finalize_shocked_fit(
-    yields = shocked_state$yields,
-    time = single_curve_state$time,
-    phi_hat = shocked_state$phi_hat,
-    Xt = shocked_Xt,
-    BS0 = shocked_BS0,
-    curves = baseline_state$curves,
-    mats = baseline_state$mats,
-    W = shocked_state$W
-  )
-
-  list(
-    tenor = baseline_state$baseline_fit$tenor,
-    curve = baseline_state$baseline_fit$curve,
-    sigma_JT = shocked_fit_state$sigma_JT,
-    Xt = shocked_fit_state$Xt,
-    W = shocked_fit_state$W,
-    ns_factor = shocked_state$ns_factor,
-    shock_profile = shock_profile,
-    shocked_factors = shock_fit$shocked_factors,
-    shocked_yields = shocked_state$yields,
-    shocked_tenor = shocked_fit_state$tenor,
-    shocked_curve = shocked_fit_state$curve,
-    shocked_single_curve_state = shocked_state,
-    baseline_state = baseline_state,
-    BS0 = shocked_BS0,
-    xt_state = shocked_xt_state
-  )
+  # Keep the application's established return fields and their order.
+  fit$input_spec <- NULL
+  append(fit, list(shock_profile = shock_profile), after = match("ns_factor", names(fit)))
 }
 
 # Supply rolling baselines from the same inputs to avoid fitting them again.
@@ -1621,24 +1550,12 @@ tontine_fit_rolling_shocked_curve_models <- function(yields, valuation_windows,
       if (!tontine_profile_has_shock(shock_profile)) {
         return(dns_fit)
       }
-      dns_profile_shock <- st_apply_factor_shock_profile(
-        curves = dns_fit$fit$curves,
-        curve_dns_factor = dns_fit$fit$ns_factor,
+      dns_shock <- sc_fit_shock(
+        baseline_state = dns_fit$fit,
         shock_curves = shock_spec$shock_curves,
         shock_factors = shock_spec$shock_factors,
-        shock_magnitudes = shock_profile$shock_magnitude,
-        shock_type = shock_type
-      )
-      shocked_state <- st_build_shocked_curve_state(
-        single_curve_state = dns_fit$fit,
-        shocked_factors = dns_profile_shock$shocked_factors
-      )
-      dns_shock <- list(
-        yields = shocked_state$yields,
-        ns_factor = shocked_state$ns_factor,
         shock_profile = shock_profile,
-        shocked_factors = dns_profile_shock$shocked_factors,
-        baseline_state = dns_fit$fit
+        shock_type = shock_type
       )
 
       dns_fit$curve_panels <- tontine_curve_yield_list_to_panels(

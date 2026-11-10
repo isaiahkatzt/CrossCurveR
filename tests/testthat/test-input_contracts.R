@@ -7,7 +7,7 @@ test_that("yield embeddings match curve and maturity identities rather than posi
   actual <- vecY(shuffled, fixture_curves, fixture_mats)
   expect_identical(actual, expected)
   expect_identical(vecY(unname(yields), fixture_curves, fixture_mats), expected)
-  expect_identical(st_validate_yields_input(unname(yields), fixture_curves, "usa"), yields)
+  expect_identical(st_check_yields(unname(yields), fixture_curves, "usa"), yields)
   expect_error(mc_fit_end(yields, .35, c(2, 4), NULL,
                           curves = fixture_curves, mats = fixture_mats), "reference")
   expect_error(dly_fit(yields, fixture_mats, .35, reference = character()), "reference")
@@ -91,7 +91,7 @@ test_that("maturity and fixed-decay validation does not change parameter convent
 })
 
 test_that("precomputed DLY fits reconcile complete maturity layouts and observed dates", {
-  yields <- make_pair_yields()
+  yields <- make_dly_pair_yields()
   sc <- dly_sc_fit_all(.35, yields, fixture_mats)
   expected <- dly_fit_from_sc(sc, yields, mats = fixture_mats)
   shuffled <- sc[rev(fixture_curves)]
@@ -120,10 +120,10 @@ test_that("MCX verifies indexed feature rows and preserves its supplied design",
   yields <- make_pair_yields()
   X <- cbind(intercept = 1, state = seq(-2, 2, length.out = length(fixture_time)))
   rownames(X) <- as.character(fixture_time)
-  fit <- function(X, normalize = TRUE) mc_fit_exo(yields, .35, c(2, 4), "usa", X,
+  fit <- function(X, normalize = TRUE) quiet_covreg(mc_fit_exo(yields, .35, c(2, 4), "usa", X,
     X_normalize = normalize, CR_algo = zero_mean_covreg_em, CR_maxiter = 2,
     CR_Binit = matrix(.01, 2, 2), CR_S0init = diag(.01, 2),
-    curves = fixture_curves, mats = fixture_mats)
+    curves = fixture_curves, mats = fixture_mats))
   baseline <- fit(X)
   expect_identical(baseline$Xt, X)
   expect_identical(fit(X, FALSE), baseline)
@@ -156,8 +156,8 @@ test_that("covariance initializers and prediction features use named identities"
   X <- cbind(intercept = 1, state = seq(-1, 1, length.out = 20))
   B <- matrix(c(.1, .2, .3, -.1), 2, dimnames = list(colnames(W), colnames(X)))
   S0 <- matrix(c(.4, .1, .1, .5), 2, dimnames = list(colnames(W), colnames(W)))
-  baseline <- zero_mean_covreg_em(W, X, B = B, S0 = S0, max_iter = 2)
-  reordered <- zero_mean_covreg_em(W, X, B = B[2:1, 2:1], S0 = S0[2:1, 2:1], max_iter = 2)
+  baseline <- quiet_covreg(zero_mean_covreg_em(W, X, B = B, S0 = S0, max_iter = 2))
+  reordered <- quiet_covreg(zero_mean_covreg_em(W, X, B = B[2:1, 2:1], S0 = S0[2:1, 2:1], max_iter = 2))
   expect_identical(reordered, baseline)
   expect_identical(cr_build(baseline, X), cr_build(baseline, X[, 2:1]))
   invalid <- X
@@ -169,6 +169,16 @@ test_that("covariance initializers and prediction features use named identities"
   rownames(W) <- as.character(fixture_time)
   rownames(X) <- as.character(fixture_time + 1)
   expect_error(zero_mean_covreg_em(W, X), "row indices")
+})
+
+test_that("covariance fits require multiple responses but allow one covariate", {
+  W <- cbind(sin(1:10), cos(1:10))
+  X <- matrix(1, 10, 1)
+  for (estimator in list(zero_mean_covreg_em, zero_mean_covreg, covreg_comp_estimator)) {
+    expect_error(estimator(W[, 1, drop = FALSE], X), "at least two response columns")
+    fit <- quiet_covreg(estimator(W, X, B = matrix(0, 2, 1), max_iter = 1))
+    expect_identical(dim(fit$B), c(2L, 1L))
+  }
 })
 
 test_that("feature specifications retain the fitted basis and normalization parameters", {

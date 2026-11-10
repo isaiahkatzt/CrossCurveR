@@ -8,8 +8,11 @@ multi-curve estimation (MCE).
 
 Package development is in progress on the `crosscurveR-package` branch.
 Reusable code now lives in `R/` and loads through the package namespace.
-API documentation, numerical validation, and publication examples remain
-work in progress.
+Reference help is provisional documentation scaffolding for the current public
+functions, including units, controls, return values and examples. Each component
+will be written and reviewed individually before submission. The documentation
+scheme, final API selection, further numerical validation, and publication
+examples remain work in progress.
 
 Source files in `R/` retain module prefixes to make their responsibilities visible:
 
@@ -31,6 +34,21 @@ Use `dly_fit()` for a complete fit, `dly_sc_fit_all()` for country fits, and
 `dly_fit_from_sc()` to build a complete fit from those country fits.
 The existing `dly_all_sc()` and `dly_fit_from_single_curve()` names remain
 available as compatibility aliases with the same arguments and results.
+
+Shock code is organized into `st_shock_state.R` (shared states, features and
+projection), `st_dly_shock.R` (DLY reconstruction), and `st_fit_shock.R`
+(DNS and MCE fitting orchestration). Use `mc_fit_shock_base()` to prepare a cache,
+`mc_fit_shock_cached()` to apply a shock, and `mc_fit_shock_refit()` to request
+ECM and covariance refits. `mc_fit_shock()` remains the convenience entrypoint.
+The public fitting and scenario functions retain their longer compatibility
+aliases; see `?shock_fits` for the name mapping.
+Scalar shocks and application profiles share `mc_fit_shocked()` for MCE
+reconstruction and fitting after factor shocks have been constructed.
+Use `sc_fit_shock()` to calibrate independent DNS curves and apply factor
+profiles through the same public workflow, optionally reusing its baseline.
+Intermediate estimation, matrix-layout and shock-state helpers are internal.
+Repository-only numerical diagnostics explicitly access private calculations;
+those helpers are not supported package interfaces.
 
 ## Installation
 
@@ -85,10 +103,30 @@ gaps are allowed; dynamic steps mean successive observations.
 
 The existing workflow uses maturities in **months** and yields in **percent**
 (`5` means 5%). NS decay is in inverse months; Svensson decay arguments are
-month-based time constants. `matname_to_numeric()` retains its historical return
-unit of years. Zero and negative yields are valid. Rate definition and compounding
+month-based time constants. Zero and negative yields are valid. Rate definition and compounding
 are supplied by the caller: estimation does not turn par yields into zero rates.
 Pricing examples interpret inputs as continuously compounded zero yields.
+
+Independent-curve yield residuals (`W`) use **observed minus fitted** for NS and
+DLY country fits. Shock reconstruction retains the baseline residual sample.
+Residual sign changes can affect signed coefficients, latent diagnostics and
+the first EM convergence check; see `?estimation_inputs` for these distinctions.
+
+Regularized EM fits use `CR_tol` for parameter-change thresholds with or without
+path storage. The likelihood-and-storage branch also requires the likelihood
+score to stabilize, so its full stopping rule can still differ from the unstored
+branch. See `?estimation_inputs`.
+
+Covariance fits warn with class `crosscurver_nonconvergence` when the iteration
+limit is reached without confirmed convergence. Warnings include the estimator,
+iteration budget, tolerance, stopping diagnostics and, for multi-curve fitting,
+tenor and response identities. Legacy `term = FALSE` runs explicitly report that
+convergence was not assessed. Final estimates and return structures are retained.
+
+Within-curve `H` construction warns with class `crosscurver_h_not_psd` for a
+materially negative eigenvalue, including cutoffs, maturities and curve context.
+Negligible negative eigenvalues within a relative tolerance are accepted.
+The matrix is returned unchanged; no PSD repair is applied.
 
 `Xt` must be a finite numeric matrix with one row per yield observation. Date
 row names are checked when supplied; numeric data-frame row labels and matrices

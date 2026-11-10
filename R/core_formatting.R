@@ -46,7 +46,7 @@ numeric_to_matname <- function(numeric_mat) {
 }
 
 matname_to_numeric <- function(colname) {
-  # Preserve the public helper's return unit: years.
+  # Preserve the historical return unit: years.
   .matname_to_months(colname) / 12
 }
 

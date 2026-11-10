@@ -62,7 +62,14 @@ blce_rescale_yield <- function(normalized, sqrt_sigma_t, P, ptype = c("tenor", "
     lambda_grid_search(lambdas, curve_yield, mats)
   }, numeric(1))
   curve_fits <- stats::setNames(lapply(seq_along(curves), function(i) {
-    bl_single_curve(curve_lambdas[[i]], yields[[i]], cutoffs, mats)
+    withCallingHandlers(bl_single_curve(curve_lambdas[[i]], yields[[i]], cutoffs, mats),
+      crosscurver_h_not_psd = function(w) {
+        w$curve <- curves[[i]]
+        w$message <- paste0("Curve '", curves[[i]], "': ", conditionMessage(w))
+        warning(w)
+        invokeRestart("muffleWarning")
+      }
+    )
   }), curves)
   bl_yields <- purrr::transpose(curve_fits)
 

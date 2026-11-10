@@ -3,6 +3,30 @@ fixture_mats <- c(1, 3, 6, 12, 24, 60)
 fixture_curves <- c("usa", "gbr")
 fixture_time <- as.Date("2020-01-01") + 0:19
 
+# Fixed-iteration numerical tests intentionally exhaust their iteration budgets.
+# Capture only the package's nonconvergence warning; other warnings stay visible.
+capture_covreg_warnings <- function(code) {
+  seen <- list()
+  value <- withCallingHandlers(code, crosscurver_nonconvergence = function(w) {
+    seen[[length(seen) + 1L]] <<- w
+    invokeRestart("muffleWarning")
+  })
+  list(value = value, warnings = seen)
+}
+
+quiet_covreg <- function(code) capture_covreg_warnings(code)$value
+
+capture_h_warnings <- function(code) {
+  seen <- list()
+  value <- withCallingHandlers(code, crosscurver_h_not_psd = function(w) {
+    seen[[length(seen) + 1L]] <<- w
+    invokeRestart("muffleWarning")
+  })
+  list(value = value, warnings = seen)
+}
+
+quiet_h <- function(code) capture_h_warnings(code)$value
+
 make_ns_curve_df <- function(curve_shift = 0, lambda = 0.35, mats = fixture_mats, time = fixture_time) {
   idx <- seq_along(time) - 1
   beta_mat <- cbind(
@@ -22,6 +46,16 @@ make_pair_yields <- function() {
     usa = make_ns_curve_df(curve_shift = 0),
     gbr = make_ns_curve_df(curve_shift = 0.2)
   )
+}
+
+# Add independent variation so DLY lagged state regressors are identifiable.
+make_dly_pair_yields <- function() {
+  yields <- make_pair_yields()
+  for (i in seq_along(yields)) {
+    yields[[i]][, -1] <- as.matrix(yields[[i]][, -1]) +
+      .01 * sin(outer(seq_along(fixture_time), seq_along(fixture_mats) + i))
+  }
+  yields
 }
 
 make_mock_blsc_list <- function(curves = fixture_curves, mats = fixture_mats, time = fixture_time) {

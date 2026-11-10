@@ -28,6 +28,15 @@ test_that("phi builders produce valid cross-sectional inverses", {
   expect_equal(unname(sven_obj$cross_phi %*% Matrix::t(sven_obj$phi)), Matrix::diag(4), tolerance = 1e-5)
 })
 
+test_that("loading regressions report noninvertible designs with model context", {
+  expect_error(bl_phi(.35, c(1, 3)),
+               "NS loading regression.*lambda=0.35.*mats=.*could not be inverted.*rcond=")
+  expect_error(dly_phi(.35, 1),
+               "DLY country loading regression.*lambda=0.35.*could not be inverted.*rcond=")
+  expect_error(sven_phi(2, 2, fixture_mats),
+               "Svensson loading regression.*lambda1=2, lambda2=2.*could not be inverted.*rcond=")
+})
+
 test_that("NS beta extraction and fit reconstruction recover exact NS yields", {
   curve <- make_ns_curve_df(lambda = 0.35)
   phi_obj <- bl_phi(0.35, fixture_mats)
@@ -38,9 +47,33 @@ test_that("NS beta extraction and fit reconstruction recover exact NS yields", {
   expect_equal(unname(fit_obj$W), matrix(0, nrow = nrow(fit_obj$W), ncol = ncol(fit_obj$W)), tolerance = 1e-5)
 })
 
+test_that("NS and DLY country residuals agree with independent OLS residuals", {
+  curve <- make_ns_curve_df(lambda = 0.35)
+  rownames(curve) <- paste0("observation", seq_len(nrow(curve)))
+  perturbation <- outer(seq_len(nrow(curve)), seq_along(fixture_mats),
+                        function(i, j) 0.05 * sin(i * j))
+  curve[, -1] <- as.matrix(curve[, -1]) + perturbation
+
+  fits <- list(
+    NS = quiet_h(bl_single_curve(0.35, curve, c(2, 4), fixture_mats)),
+    DLY = dly_sc_fit(0.35, curve, fixture_mats)
+  )
+  observed <- as.matrix(curve[, -1])
+
+  for (fit in fits) {
+    independent <- stats::lm.fit(Matrix::t(fit$phi$phi), Matrix::t(observed))
+    expected <- Matrix::t(independent$residuals)
+    expect_gt(max(expected), 0.01)
+    expect_lt(min(expected), -0.01)
+    expect_equal(unname(fit$nsfit$W), unname(expected), tolerance = 1e-10)
+    expect_equal(unname(fit$nsfit$NSfit + fit$nsfit$W), unname(observed), tolerance = 1e-10)
+    expect_identical(dimnames(fit$nsfit$W), dimnames(fit$nsfit$NSfit - observed))
+  }
+})
+
 test_that("bl_bdiag_H validates cutoffs and returns a square covariance block matrix", {
   residuals <- as.matrix(make_ns_curve_df()[, -1]) - mean(as.matrix(make_ns_curve_df()[, -1]))
-  H <- bl_bdiag_H(residuals, c(2, 4), fixture_mats)
+  H <- quiet_h(bl_bdiag_H(residuals, c(2, 4), fixture_mats))
 
   expect_equal(dim(H), c(length(fixture_mats), length(fixture_mats)))
   expect_error(bl_bdiag_H(residuals, c(2, 6), fixture_mats), "Rate cutoffs")

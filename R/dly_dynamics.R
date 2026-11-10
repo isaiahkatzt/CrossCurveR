@@ -14,7 +14,8 @@ dly_fit_var1 <- function(state_matrix) {
   state_matrix <- as.matrix(state_matrix)
 
   if (nrow(state_matrix) < 2) {
-    stop("state_matrix must contain at least two rows to estimate dynamics.")
+    stop("DLY global dynamics: at least two observations are required to form lagged pairs; received ",
+         nrow(state_matrix), ".", call. = FALSE)
   }
 
   row_template <- rownames(state_matrix)
@@ -31,7 +32,10 @@ dly_fit_var1 <- function(state_matrix) {
     colnames(coef_mat) <- colnames(response)
   }
 
-  coef_mat[!is.finite(coef_mat)] <- 0
+  if (any(!is.finite(coef_mat))) {
+    stop("Non-finite coefficients generated in DLY global dynamics; check for rank-deficient regressors.",
+         call. = FALSE)
+  }
 
   intercept <- as.numeric(coef_mat["Intercept", ])
   names(intercept) <- colnames(response)
@@ -63,7 +67,8 @@ dly_fit_rs <- function(residual_matrix, global_matrix) {
   }
 
   if (nrow(residual_matrix) < 2) {
-    stop("residual_matrix must contain at least two rows to estimate dynamics.")
+    stop("DLY residual dynamics: at least two observations are required to form lagged pairs; received ",
+         nrow(residual_matrix), ".", call. = FALSE)
   }
 
   row_template <- rownames(residual_matrix)
@@ -85,7 +90,10 @@ dly_fit_rs <- function(residual_matrix, global_matrix) {
     colnames(coef_mat) <- colnames(response)
   }
 
-  coef_mat[!is.finite(coef_mat)] <- 0
+  if (any(!is.finite(coef_mat))) {
+    stop("Non-finite coefficients generated in DLY residual dynamics; check for rank-deficient regressors.",
+         call. = FALSE)
+  }
 
   intercept <- as.numeric(coef_mat["Intercept", ])
   names(intercept) <- colnames(response)

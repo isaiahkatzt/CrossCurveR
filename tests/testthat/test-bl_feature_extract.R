@@ -53,6 +53,31 @@ test_that("blmc_ECM handles the zero-rank case", {
   expect_equal(result, list(Gmatrix = 0, Fmatrix = 0, rank = 0))
 })
 
+test_that("ECM errors preserve dependency details and available sample and lag context", {
+  betas <- matrix(seq_len(24), ncol = 6)
+  for (dependency in c("VARselect", "VECM", "rank.test")) {
+    bindings <- list(VARselect = function(...) list(selection = c("SC(n)" = 3)),
+                     VECM = function(...) list())
+    bindings[[dependency]] <- function(...) stop("original dependency error")
+    expected <- paste0("ECM estimation: failed.*observations=4, variables=6",
+                       if (dependency != "VARselect") ", VECM lag=2" else "",
+                       ".*original dependency error")
+    with_temp_bindings(bindings, expect_error(blmc_ECM(betas), expected))
+  }
+})
+
+test_that("spread normalization identifies zero and undefined standard deviations", {
+  betas <- cbind(varying = 1:4, constant = rep(2, 4))
+  expect_error(blmc_cspread(betas, diag(2), curve_name = "gbr"),
+               "Spread normalization: zero or nonfinite standard deviation for gbr.r2")
+  expect_error(blmc_cspread(betas[1, , drop = FALSE], diag(2), curve_name = "gbr"),
+               "Spread normalization: zero or nonfinite standard deviation for gbr.r1, gbr.r2")
+  raw <- blmc_cspread(betas, diag(2), curve_name = "gbr", normalize = FALSE)
+  expect_identical(unname(raw), unname(betas))
+  expect_error(blcc_build_Xt(list(gbr = NULL), list(gbr = list(rank = 0))),
+               "Cointegration feature construction: no usable relationships")
+})
+
 test_that("spread and reversion helpers normalize and rank feature blocks", {
   cc_betas <- matrix(1:12, ncol = 3)
   G <- Matrix::diag(3)
@@ -176,6 +201,22 @@ test_that("time smoothers build knot points, spline bases, and rolling averages"
   expect_equal(length(ns_smooth), length(fixture_time))
   expect_equal(length(bs_smooth), length(fixture_time))
   expect_equal(dim(rm_smooth), c(length(fixture_time), 2))
+})
+
+test_that("spline smoothing uses numeric observation coordinates without a date origin", {
+  for (time in list(-10L:9L, -5 + cumsum(seq_len(20)^1.3) / 10)) {
+    xt <- sin(seq_along(time))
+    knots <- stats::quantile(time, probs = seq(0, 1, length.out = 5))[2:4]
+    expect_identical(fe_kp_quantile(time, knot_count = 3), knots)
+    for (kind in c("ns", "bs")) {
+      basis <- if (kind == "ns") splines::ns(time, knots = knots) else
+        splines::bs(time, knots = knots, degree = 3)
+      expected <- stats::predict(stats::lm(xt ~ basis))
+      expect_equal(fe_xt_spline(time, xt, knots, spline_fit = kind), expected)
+      expect_equal(unname(blce_smooth_Xt(cbind(x = xt), time, kind, knot_count = 3)),
+                   matrix(unname(expected), ncol = 1))
+    }
+  }
 })
 
 test_that("HP smoother returns same-shaped smoothed features", {

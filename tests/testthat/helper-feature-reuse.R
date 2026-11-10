@@ -15,7 +15,9 @@ make_feature_baseline <- function(normalize = TRUE, trunc = FALSE, smoother = NU
     names(panel) <- c("time", vapply(mats, numeric_to_matname, character(1)))
     panel
   })
-  single <- st_prepare_single_curve_state(yields, .35, c(2, 4), curves, mats)
+  # These fixtures test feature reuse; H validity is covered separately.
+  single <- withCallingHandlers(st_sc_state(yields, .35, c(2, 4), curves, mats),
+    crosscurver_h_not_psd = function(w) invokeRestart("muffleWarning"))
   G <- matrix(0, 6, 2, dimnames = list(NULL, c("level", "slope")))
   G[c(1, 4), 1] <- c(-1, 1)
   G[c(2, 5), 2] <- c(-1, 1)
@@ -28,7 +30,7 @@ make_feature_baseline <- function(normalize = TRUE, trunc = FALSE, smoother = NU
     CR_Binit = NULL, CR_S0init = NULL, CR_S0_shrink_diag = .2,
     CR_check_every = 1, CR_use_loglik = FALSE, CR_store_path = FALSE,
     CR_verb = FALSE, CR_term = TRUE)
-  xt <- st_build_xt_state(single$bl_yields, curves, "usa", reuse_ECM = TRUE,
+  xt <- st_xt_state(single$bl_yields, curves, "usa", reuse_ECM = TRUE,
     baseline_ecm = ecm, X_normalize = normalize, X_trunc = trunc,
     Xt_smooth = config$Xt_smooth, smoother = smoother, knot_count = 3,
     k_count = 9, k_pass = 2, hp_lambda = 10, henderson_k = 13, ytime = time)
@@ -37,7 +39,7 @@ make_feature_baseline <- function(normalize = TRUE, trunc = FALSE, smoother = NU
                dimnames = list(curves, colnames(xt$Xt))),
     S0 = matrix(c(.04, .01, .01, .09), 2, dimnames = list(curves, curves))))
   names(BS0) <- paste0("X", vapply(mats, numeric_to_matname, character(1)))
-  fitted <- st_finalize_shocked_fit(yields, time, single$phi_hat, xt$Xt, BS0, curves, mats, single$W)
+  fitted <- st_project_fit(yields, time, single$phi_hat, xt$Xt, BS0, curves, mats, single$W)
   spec <- getFromNamespace(".cc_input_spec", "CrossCurveR")(
     yields, mats, curves, xt$Xt, xt$feature_spec)
   structure(list(curves = curves, mats = mats, reference = "usa", yields = yields,

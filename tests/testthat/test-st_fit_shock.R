@@ -1,3 +1,33 @@
+test_that("short shock names preserve the complete legacy interfaces", {
+  aliases <- c(
+    st_extract_ns_factor = "st_ns_factors",
+    st_validate_yields_input = "st_check_yields",
+    st_prepare_single_curve_state = "st_sc_state",
+    st_build_xt_from_ecm = "st_xt_ecm",
+    st_build_xt_state = "st_xt_state",
+    st_build_shocked_curve_state = "st_shock_state",
+    st_apply_factor_shock = "st_factor_shock",
+    st_apply_factor_shock_profile = "st_factor_profile",
+    st_dns_shock_from_single_curve_state = "st_dns_shock",
+    st_build_shocked_dly_single_curve = "st_dly_sc",
+    st_dly_project_global_factor = "st_dly_project",
+    st_dly_predict_country_factor = "st_dly_predict",
+    st_average_level_shock_profile = "st_mean_profile",
+    st_dly_global_shock_from_fit_profile = "st_dly_global_shock",
+    st_dly_shock_from_fit_profile = "st_dly_shock",
+    st_align_Xt_to_baseline = "st_align_Xt",
+    st_finalize_shocked_fit = "st_project_fit",
+    st_validate_baseline_state = "st_check_baseline",
+    mc_fit_shock_baseline = "mc_fit_shock_base",
+    mc_fit_shock_from_baseline = "mc_fit_shock_cached",
+    mc_fit_shock_refit_from_baseline = "mc_fit_shock_refit"
+  )
+  ns <- asNamespace("CrossCurveR")
+  for (old in names(aliases)) {
+    expect_identical(get(old, ns), get(aliases[[old]], ns))
+  }
+})
+
 make_fake_shock_baseline <- function() {
   structure(list(
     curves = fixture_curves,
@@ -62,16 +92,16 @@ test_that("cached baseline contracts detect changes in dates and feature identit
   baseline <- make_fake_shock_baseline()
   baseline$input_spec <- .cc_input_spec(baseline$yields, baseline$mats,
                                        baseline$curves, baseline$xt_state$Xt)
-  expect_identical(st_validate_baseline_state(baseline), baseline)
+  expect_identical(st_check_baseline(baseline), baseline)
   wrong <- baseline
   wrong$xt_state$Xt <- wrong$xt_state$Xt[-1, , drop = FALSE]
-  expect_error(st_validate_baseline_state(wrong), "one row")
+  expect_error(st_check_baseline(wrong), "one row")
   wrong <- baseline
   colnames(wrong$xt_state$Xt) <- "different"
-  expect_error(st_validate_baseline_state(wrong), "stored input specification")
+  expect_error(st_check_baseline(wrong), "stored input specification")
   wrong <- baseline
   wrong$single_curve_state$yields$gbr$time <- fixture_time + 1
-  expect_error(st_validate_baseline_state(wrong), "observation index")
+  expect_error(st_check_baseline(wrong), "observation index")
 })
 
 test_that("mc_fit_shock_baseline builds and returns a reusable baseline state", {
@@ -85,12 +115,12 @@ test_that("mc_fit_shock_baseline builds and returns a reusable baseline state", 
 
   baseline <- with_temp_bindings(
     list(
-      st_prepare_single_curve_state = function(...) fake_single_curve_state,
-      st_build_xt_state = function(...) fake_xt_state,
+      st_sc_state = function(...) fake_single_curve_state,
+      st_xt_state = function(...) fake_xt_state,
       blcc_fe = function(...) fake_BS0,
-      st_finalize_shocked_fit = function(...) fake_fit
+      st_project_fit = function(...) fake_fit
     ),
-    mc_fit_shock_baseline(
+    mc_fit_shock_base(
       yields = make_pair_yields(),
       lambdas = c(0.1, 0.2),
       cutoffs = c(1, 3),
@@ -128,7 +158,7 @@ test_that("mc_fit_shock_from_baseline uses cached DNS state instead of rebuildin
           })
         )
       },
-      st_build_shocked_curve_state = function(single_curve_state, shocked_factors) {
+      st_shock_state = function(single_curve_state, shocked_factors) {
         list(
           yields = single_curve_state$yields,
           bl_yields = list(),
@@ -137,11 +167,11 @@ test_that("mc_fit_shock_from_baseline uses cached DNS state instead of rebuildin
           ns_factor = shocked_factors
         )
       },
-      st_build_xt_state = function(...) list(
+      st_xt_state = function(...) list(
         Xt = matrix(2, nrow = length(fixture_time), ncol = 1, dimnames = list(NULL, "gbr.r1")),
         cc_ci_features = list(cc_ecm = list(gbr = list(rank = 1, Gmatrix = matrix(1, nrow = 1, ncol = 1))))
       ),
-      st_finalize_shocked_fit = function(yields, time, phi_hat, Xt, BS0, curves, mats, W) {
+      st_project_fit = function(yields, time, phi_hat, Xt, BS0, curves, mats, W) {
         list(
           tenor = data.frame(time = time, shocked = seq_along(time)),
           curve = data.frame(time = time, shocked = seq_along(time)),
@@ -151,7 +181,7 @@ test_that("mc_fit_shock_from_baseline uses cached DNS state instead of rebuildin
         )
       }
     ),
-    mc_fit_shock_from_baseline(
+    mc_fit_shock_cached(
       baseline_state = baseline_state,
       shock_curves = "usa",
       shock_factors = "L",
@@ -177,9 +207,9 @@ test_that("st_build_xt_state can fall back to baseline ECM when a refit yields n
         cc_beta = "refit_beta"
       ),
       blcc_build_Xt = function(...) {
-        stop("No usable cointegration relationships were identified for Xt construction.")
+        stop("Cointegration feature construction: no usable relationships were identified.")
       },
-      st_build_xt_from_ecm = function(bl_yields, curves, reference, curve_ecm,
+      st_xt_ecm = function(bl_yields, curves, reference, curve_ecm,
                                       X_normalize, X_trunc) {
         captured_ecm <<- curve_ecm
         list(
@@ -190,7 +220,7 @@ test_that("st_build_xt_state can fall back to baseline ECM when a refit yields n
     ),
     {
       expect_warning(
-        fallback_result <- st_build_xt_state(
+        fallback_result <- st_xt_state(
           bl_yields = list(),
           curves = fixture_curves,
           reference = "usa",
@@ -210,7 +240,7 @@ test_that("st_build_xt_state can fall back to baseline ECM when a refit yields n
   expect_equal(result$cc_ci_features$cc_ecm, baseline_ecm)
   expect_equal(result$cc_ci_features$refit_cc_ci_features$cc_ecm, "refit_ecm")
   expect_equal(result$cc_ci_features$ECM_fallback, "baseline")
-  expect_match(result$cc_ci_features$ECM_fallback_reason, "No usable cointegration")
+  expect_match(result$cc_ci_features$ECM_fallback_reason, "Cointegration feature construction: no usable")
 })
 
 test_that("mc_fit_shock reuses a supplied baseline_state", {
@@ -218,8 +248,8 @@ test_that("mc_fit_shock reuses a supplied baseline_state", {
 
   result <- with_temp_bindings(
     list(
-      mc_fit_shock_baseline = function(...) stop("baseline should not be rebuilt"),
-      mc_fit_shock_from_baseline = function(baseline_state, shock_curves, shock_factors, shock_magnitude, ...) {
+      mc_fit_shock_base = function(...) stop("baseline should not be rebuilt"),
+      mc_fit_shock_cached = function(baseline_state, shock_curves, shock_factors, shock_magnitude, ...) {
         list(
           baseline_reference = baseline_state$reference,
           shock_curves = shock_curves,
@@ -240,6 +270,56 @@ test_that("mc_fit_shock reuses a supplied baseline_state", {
   expect_equal(result$shock_curves, "usa")
   expect_equal(result$shock_factors, "L")
   expect_equal(result$shock_magnitude, 0.15)
+})
+
+test_that("shock helpers align factor identities across column permutations", {
+  for (factors in list(c("L", "S"), c("L", "S", "C"))) {
+    x <- matrix(seq_len(5 * length(factors)), 5, dimnames = list(NULL, factors))
+    input <- list(usa = x, gbr = x + 20)
+    orders <- if (length(factors) == 2) list(1:2, 2:1) else
+      list(1:3, c(1, 3, 2), c(2, 1, 3), c(2, 3, 1), c(3, 1, 2), 3:1)
+    for (kind in c("additive", "multiplicative")) for (factor in factors) {
+      profile <- function(z) st_factor_profile(names(input), z, "usa", factor, rep(.2, 5), kind)
+      window <- function(z) st_factor_shock(names(input), z, "usa", factor, .2,
+                                                kind, shock_window = 2, shock_window_position = "last")
+      expected <- input
+      expected$usa[, factor] <- if (kind == "additive") x[, factor] + .2 else x[, factor] * 1.2
+      expect_identical(profile(input)$shocked_factors, expected)
+      for (order in orders) {
+        shuffled <- lapply(input, function(z) z[, order, drop = FALSE])
+        expect_identical(profile(shuffled), profile(input))
+        expect_identical(window(shuffled), window(input))
+      }
+    }
+    shuffled <- lapply(input, function(z) z[, rev(factors), drop = FALSE])
+    expect_identical(st_mean_profile(shuffled, rep(.1, 5)),
+                     st_mean_profile(input, rep(.1, 5)))
+  }
+})
+
+test_that("shock factor labels reject ambiguity and retain positional compatibility", {
+  x <- cbind(L = 1:3, S = 4:6, C = 7:9)
+  for (labels in list(c("L", "L", "C"), c("L", "l1", "C"), c("L", "S", "unknown"),
+                      c("L", "", "C"), c("L", NA, "C"))) {
+    bad <- x
+    colnames(bad) <- labels
+    input <- list(usa = x, gbr = bad) # Validate even an unshocked curve.
+    expect_error(st_factor_profile(names(input), input, "usa", "L", rep(.1, 3)),
+                 "Factor columns")
+    for (kind in c("additive", "multiplicative")) {
+      expect_error(st_factor_shock(names(input), input, "usa", "L", .1, kind), "Factor columns")
+    }
+    expect_error(st_mean_profile(input, rep(.1, 3)), "Factor columns")
+  }
+  alias <- x[, c("C", "L", "S")]
+  colnames(alias) <- c("l3", "l1", "l2")
+  expect_identical(.st_factor_matrix(alias), x)
+  unnamed <- x
+  colnames(unnamed) <- NULL
+  expect_identical(.st_factor_matrix(unnamed), unnamed)
+  expect_error(.st_factor_matrix(x[, c("L", "C")]), "Factor columns")
+  expect_error(st_factor_profile(c("usa", "gbr"),
+    list(usa = x, gbr = x[, 1:2]), "usa", "L", rep(.1, 3)), "same number of columns")
 })
 
 test_that("st_additive supports placing a finite shock window at the end of the sample", {
@@ -287,14 +367,14 @@ test_that("st_dns_shock_from_single_curve_state applies the requested factor sho
 
   result <- with_temp_bindings(
     list(
-      st_build_shocked_curve_state = function(single_curve_state, shocked_factors) {
+      st_shock_state = function(single_curve_state, shocked_factors) {
         list(
           yields = single_curve_state$yields,
           ns_factor = shocked_factors
         )
       }
     ),
-    st_dns_shock_from_single_curve_state(
+    st_dns_shock(
       single_curve_state = single_curve_state,
       shock_curves = "usa",
       shock_factors = "L",
@@ -310,7 +390,7 @@ test_that("st_dns_shock_from_single_curve_state applies the requested factor sho
 
 test_that("st_dly_shock_from_fit_profile transmits shocks through the DLY global factor", {
   dly_fit_obj <- dly_fit(
-    yields = make_pair_yields(),
+    yields = make_dly_pair_yields(),
     mats = fixture_mats,
     lambdas = c(0.35),
     curves = fixture_curves,
@@ -321,14 +401,14 @@ test_that("st_dly_shock_from_fit_profile transmits shocks through the DLY global
 
   shock_profile <- rep(0, length(fixture_time))
   shock_profile[1:5] <- 0.25
-  result <- st_dly_shock_from_fit_profile(
+  result <- st_dly_shock(
     dly_fit_obj = dly_fit_obj,
     shock_curves = "usa",
     shock_factors = "L",
     shock_profile = shock_profile
   )
 
-  expected_shocked_single_curve <- st_build_shocked_dly_single_curve(
+  expected_shocked_single_curve <- st_dly_sc(
     dly_single_curve = dly_fit_obj$single_curve,
     shocked_factors = result$shocked_factors,
     curves = fixture_curves
@@ -343,12 +423,12 @@ test_that("st_dly_shock_from_fit_profile transmits shocks through the DLY global
     predict(dly_fit_obj$global_factors$slope$pca, newdata = expected_slope_draw)[, 1]
   )
   shock_rows <- 1:5
-  expected_shocked_level <- st_dly_predict_country_factor(
+  expected_shocked_level <- st_dly_predict(
     factor_model = dly_fit_obj$factor_models$level,
     global_factor = expected_global_level,
     curves = fixture_curves
   )
-  expected_shocked_slope <- st_dly_predict_country_factor(
+  expected_shocked_slope <- st_dly_predict(
     factor_model = dly_fit_obj$factor_models$slope,
     global_factor = expected_global_slope,
     curves = fixture_curves
@@ -417,7 +497,7 @@ test_that("st_dly_shock_from_fit_profile transmits shocks through the DLY global
 
 test_that("st_dly_global_shock_from_fit_profile shifts average fitted country level by target profile", {
   dly_fit_obj <- dly_fit(
-    yields = make_pair_yields(),
+    yields = make_dly_pair_yields(),
     mats = fixture_mats,
     lambdas = c(0.35),
     curves = fixture_curves,
@@ -427,14 +507,14 @@ test_that("st_dly_global_shock_from_fit_profile shifts average fitted country le
   )
 
   shock_fraction <- rep(-0.3, length(fixture_time))
-  target_profile <- st_average_level_shock_profile(
+  target_profile <- st_mean_profile(
     curve_factor = dly_fit_obj$country_betas$raw,
     shock_fraction_profile = shock_fraction,
     shock_factor = "L",
     curves = fixture_curves
   )
 
-  result <- st_dly_global_shock_from_fit_profile(
+  result <- st_dly_global_shock(
     dly_fit_obj = dly_fit_obj,
     shock_factors = "L",
     shock_profile = target_profile
@@ -471,7 +551,7 @@ test_that("mc_fit_shock_from_baseline uses shocked factors without refitting sin
           shocked_factors = direct_shocked_factors
         )
       },
-      st_build_shocked_curve_state = function(single_curve_state, shocked_factors) {
+      st_shock_state = function(single_curve_state, shocked_factors) {
         list(
           yields = shocked_yields,
           bl_yields = "shock_bl_yields",
@@ -480,10 +560,10 @@ test_that("mc_fit_shock_from_baseline uses shocked factors without refitting sin
           ns_factor = "shock_ns_factor"
         )
       },
-      st_prepare_single_curve_state = function(yields, lambdas, cutoffs, curves, mats) {
+      st_sc_state = function(yields, lambdas, cutoffs, curves, mats) {
         stop("single-curve state should not be refit during MCE shocks")
       },
-      st_build_xt_state = function(bl_yields, curves, reference, reuse_ECM, baseline_ecm, ..., ytime) {
+      st_xt_state = function(bl_yields, curves, reference, reuse_ECM, baseline_ecm, ..., ytime) {
         captured_bl_yields <<- bl_yields
         expect_true(reuse_ECM)
         expect_equal(reference, "usa")
@@ -498,7 +578,7 @@ test_that("mc_fit_shock_from_baseline uses shocked factors without refitting sin
         captured_W <<- Wt
         "refit_BS0"
       },
-      st_finalize_shocked_fit = function(yields, time, phi_hat, Xt, BS0, curves, mats, W) {
+      st_project_fit = function(yields, time, phi_hat, Xt, BS0, curves, mats, W) {
         expect_equal(yields, shocked_yields)
         expect_equal(time, fixture_time)
         expect_equal(phi_hat, "shock_phi_hat")
@@ -513,7 +593,7 @@ test_that("mc_fit_shock_from_baseline uses shocked factors without refitting sin
         )
       }
     ),
-    mc_fit_shock_from_baseline(
+    mc_fit_shock_cached(
       baseline_state = baseline_state,
       shock_curves = "usa",
       shock_factors = "L",
@@ -540,7 +620,7 @@ test_that("mc_fit_shock_refit_from_baseline delegates to MCE refits without sing
 
   result <- with_temp_bindings(
     list(
-      mc_fit_shock_from_baseline = function(baseline_state, shock_curves, shock_factors,
+      mc_fit_shock_cached = function(baseline_state, shock_curves, shock_factors,
                                             shock_magnitude, shock_type, shock_window,
                                             shock_window_position,
                                             reuse_BS0, reuse_ECM,
@@ -558,7 +638,7 @@ test_that("mc_fit_shock_refit_from_baseline delegates to MCE refits without sing
         list(tag = "delegated", baseline_reference = baseline_state$reference)
       }
     ),
-    mc_fit_shock_refit_from_baseline(
+    mc_fit_shock_refit(
       baseline_state = baseline_state,
       shock_curves = "usa",
       shock_factors = "L",
@@ -576,6 +656,30 @@ test_that("mc_fit_shock_refit_from_baseline delegates to MCE refits without sing
   expect_equal(captured$shock_window_position, "first")
   expect_false(captured$reuse_BS0)
   expect_false(captured$reuse_ECM)
+})
+
+test_that("direct shock helpers reject nonfinite magnitudes and fractions", {
+  factors <- make_fake_shock_baseline()$single_curve_state$ns_factor
+  fit <- dly_fit(make_dly_pair_yields(), mats = fixture_mats, lambdas = 0.35)
+
+  for (bad in c(NA_real_, NaN, Inf, -Inf)) {
+    profile <- rep(0, length(fixture_time))
+    profile[2] <- bad
+    expect_error(st_build_shock_matrix(fixture_curves, c("L", "S"), "usa",
+                                      c("L", "S"), c(L = 0.1, S = bad)), "finite")
+    for (kind in c("additive", "multiplicative")) {
+      expect_error(st_factor_shock(fixture_curves, factors, "usa", "L", bad,
+                                         shock_type = kind), "finite")
+      expect_error(st_factor_profile(fixture_curves, factors, "usa", "L",
+                                                 profile, shock_type = kind), "finite")
+      expect_error(st_dly_shock(fit, "usa", "L", profile,
+                                                shock_type = kind), "finite")
+    }
+    expect_error(st_mean_profile(factors, profile), "finite")
+    expect_error(st_dly_global_shock(fit, "L", profile), "finite")
+    expect_error(st_dly_global_shock(fit, "L",
+                  data.frame(shock_magnitude = profile)), "finite")
+  }
 })
 
 test_that("st_build_shock_matrix validates inputs and places named shocks", {
@@ -657,7 +761,7 @@ test_that("st_apply_factor_shock dispatches to additive or multiplicative shock 
       },
       st_multiplicative = function(...) stop("multiplicative should not be called")
     ),
-    st_apply_factor_shock(
+    st_factor_shock(
       curves = fixture_curves,
       curve_dns_factor = curve_dns_factor,
       shock_curves = "usa",
@@ -685,7 +789,7 @@ test_that("st_apply_factor_shock dispatches to additive or multiplicative shock 
         list(tag = "multiplicative")
       }
     ),
-    st_apply_factor_shock(
+    st_factor_shock(
       curves = fixture_curves,
       curve_dns_factor = curve_dns_factor,
       shock_curves = "gbr",
@@ -705,7 +809,7 @@ test_that("st_apply_factor_shock dispatches to additive or multiplicative shock 
 })
 
 test_that("st_build_shocked_curve_state rebuilds curve panels from shocked factors", {
-  single_curve_state <- st_prepare_single_curve_state(
+  single_curve_state <- st_sc_state(
     yields = make_pair_yields(),
     lambdas = c(0.35),
     cutoffs = c(2, 4),
@@ -715,7 +819,7 @@ test_that("st_build_shocked_curve_state rebuilds curve panels from shocked facto
   shocked_factors <- single_curve_state$ns_factor
   shocked_factors$usa[, "L"] <- shocked_factors$usa[, "L"] + 0.25
 
-  shocked_state <- st_build_shocked_curve_state(
+  shocked_state <- st_shock_state(
     single_curve_state = single_curve_state,
     shocked_factors = shocked_factors
   )
@@ -734,7 +838,7 @@ test_that("st_build_shocked_curve_state rebuilds curve panels from shocked facto
 })
 
 test_that("st_build_xt_from_ecm reuses supplied ECM matrices to build Xt", {
-  single_curve_state <- st_prepare_single_curve_state(
+  single_curve_state <- st_sc_state(
     yields = make_pair_yields(),
     lambdas = c(0.35),
     cutoffs = c(2, 4),
@@ -745,7 +849,7 @@ test_that("st_build_xt_from_ecm reuses supplied ECM matrices to build Xt", {
   colnames(G) <- "level_spread"
   baseline_ecm <- list(gbr = list(rank = 1, Gmatrix = G))
 
-  xt_state <- st_build_xt_from_ecm(
+  xt_state <- st_xt_ecm(
     bl_yields = single_curve_state$bl_yields,
     curves = fixture_curves,
     reference = "usa",
@@ -766,16 +870,16 @@ test_that("st_align_Xt_to_baseline reorders compatible columns and rejects incom
   Xt_new <- cbind(b = 1:3, a = 4:6)
   Xt_reference <- cbind(a = 10:12, b = 13:15)
 
-  aligned <- st_align_Xt_to_baseline(Xt_new, Xt_reference)
+  aligned <- st_align_Xt(Xt_new, Xt_reference)
 
   expect_equal(colnames(aligned), colnames(Xt_reference))
   expect_equal(aligned[, "a"], Xt_new[, "a"])
   expect_error(
-    st_align_Xt_to_baseline(cbind(a = 1:3), Xt_reference),
+    st_align_Xt(cbind(a = 1:3), Xt_reference),
     "incompatible"
   )
   expect_error(
-    st_align_Xt_to_baseline(cbind(a = 1:3, c = 4:6), Xt_reference),
+    st_align_Xt(cbind(a = 1:3, c = 4:6), Xt_reference),
     "columns do not match"
   )
 })
@@ -819,7 +923,7 @@ test_that("st_finalize_shocked_fit orchestrates covariance rescaling into tenor 
         data.frame(time = time, kind = ptype)
       }
     ),
-    st_finalize_shocked_fit(
+    st_project_fit(
       yields = yields,
       time = fixture_time,
       phi_hat = matrix(1, nrow = 4, ncol = 3),
@@ -842,26 +946,26 @@ test_that("st_validate_baseline_state accepts reusable baseline states and rejec
   baseline_state <- make_fake_shock_baseline()
 
   expect_identical(
-    st_validate_baseline_state(baseline_state, curves = fixture_curves, mats = fixture_mats, reference = "usa"),
+    st_check_baseline(baseline_state, curves = fixture_curves, mats = fixture_mats, reference = "usa"),
     baseline_state
   )
 
   invalid_state <- baseline_state
   invalid_state$BS0 <- NULL
   expect_error(
-    st_validate_baseline_state(invalid_state),
+    st_check_baseline(invalid_state),
     "`baseline_state` must be created"
   )
   expect_error(
-    st_validate_baseline_state(baseline_state, curves = rev(fixture_curves)),
+    st_check_baseline(baseline_state, curves = rev(fixture_curves)),
     "Supplied `curves` do not match"
   )
   expect_error(
-    st_validate_baseline_state(baseline_state, mats = fixture_mats[-1]),
+    st_check_baseline(baseline_state, mats = fixture_mats[-1]),
     "Supplied `mats` do not match"
   )
   expect_error(
-    st_validate_baseline_state(baseline_state, reference = "gbr"),
+    st_check_baseline(baseline_state, reference = "gbr"),
     "Supplied `reference` does not match"
   )
 })

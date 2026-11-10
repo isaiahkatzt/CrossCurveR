@@ -74,6 +74,22 @@ test_that("short DLY entrypoints preserve existing calls and complete fit output
   }
 })
 
+test_that("DLY dynamic regressions reject unidentified coefficients", {
+  constant <- cbind(L = rep(2, 8), S = rep(-1, 8))
+  expect_error(dly_fit_var1(constant[1, , drop = FALSE]),
+               "DLY global dynamics: at least two observations.*received 1")
+  expect_error(dly_fit_rs(constant[1, , drop = FALSE], constant[1, , drop = FALSE]),
+               "DLY residual dynamics: at least two observations.*received 1")
+  collinear <- cbind(L = 1:8, S = 2 * (1:8))
+  for (state in list(constant, collinear, constant[1:2, , drop = FALSE])) {
+    expect_error(dly_fit_var1(state), "Non-finite coefficients.*global dynamics")
+    expect_error(dly_fit_var1_block(state), "Non-finite coefficients.*global dynamics")
+    expect_error(dly_fit_rs(state, state), "Non-finite coefficients.*residual dynamics")
+    expect_error(dly_fit_country_dynamic_block(state, state),
+                 "Non-finite coefficients.*residual dynamics")
+  }
+})
+
 test_that("dly_all_sc selects the exact lambda for two-factor NS data", {
   fixture <- make_dly_fixture()
   lambda_grid <- c(0.2, 0.35, 0.5)

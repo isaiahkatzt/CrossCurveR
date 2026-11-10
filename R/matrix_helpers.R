@@ -2,6 +2,22 @@
 #         Matrix Arithmetic Helpers         #
 #############################################
 
+.bl_loading_inverse <- function(gram, context) {
+  if (any(!is.finite(gram))) {
+    stop(context, ": normal-equation matrix contains nonfinite values.", call. = FALSE)
+  }
+  inverse <- tryCatch(Matrix::solve(gram), error = function(e) {
+    reciprocal_condition <- tryCatch(rcond(gram), error = function(e) NA_real_)
+    stop(context, ": normal-equation matrix could not be inverted (rcond=",
+         format(reciprocal_condition, scientific = TRUE), "). ", conditionMessage(e),
+         call. = FALSE)
+  })
+  if (any(!is.finite(inverse))) {
+    stop(context, ": normal-equation inverse contains nonfinite values.", call. = FALSE)
+  }
+  inverse
+}
+
 symmPSD_sqrt <- function(sPSD) {
   ## compute square root matrix of a symmetric PSD matrix
   sPSD <- as.matrix(sPSD)

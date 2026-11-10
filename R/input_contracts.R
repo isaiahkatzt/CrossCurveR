@@ -256,6 +256,9 @@
 
 .cc_cov_inputs <- function(W, X, S0, B) {
   W <- .cc_matrix(W, "`W`")
+  if (ncol(W) < 2L) {
+    stop("Covariance regression requires at least two response columns in `W`; univariate responses are not supported.", call. = FALSE)
+  }
   X <- .cc_matrix(X, "`X`")
   if (nrow(W) != nrow(X)) stop("W and X must have the same number of rows.", call. = FALSE)
   wr <- rownames(W)

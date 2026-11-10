@@ -8,6 +8,17 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 
 library(CrossCurveR)
+
+# Repository diagnostics deliberately examine private package calculations.
+private_helpers <- c(
+  "vecY", "PY_full", "cf_curve_cut", "cf_phi_cut",
+  "bln_build_P", "sqrt_inv_build", "bln_YB", "bln_phi_hat",
+  "bln_phi_BT", "bln_phi_CT", "bln_normalized_fit", "blce_rescale_yield",
+  "numeric_to_matname", "lambda_grid_search"
+)
+list2env(setNames(lapply(private_helpers, utils::getFromNamespace,
+                        ns = "CrossCurveR"), private_helpers), envir = environment())
+rm(private_helpers)
 library(dplyr)
 library(purrr)
 library(ggplot2)

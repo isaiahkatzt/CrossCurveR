@@ -90,7 +90,9 @@ bln_rescale_beta_NS <- function(yield, check_phi, mats) {
 
   ## NS computation
   for (i in 1:N) {
-    crosscheck_phi <- Matrix::solve(Matrix::crossprod(check_phi[[i]])) %*% Matrix::t(check_phi[[i]])
+    crosscheck_phi <- .bl_loading_inverse(Matrix::crossprod(check_phi[[i]]),
+      sprintf("Transformed NS loading regression (observation %d; mats=[%s] months)",
+              i, paste(mats, collapse = ", "))) %*% Matrix::t(check_phi[[i]])
     daily_betas[i, ] <- matrix(Matrix::t(crosscheck_phi %*% matrix_yield[i, ]))
     NS_fit[i, ] <- matrix(check_phi[[i]] %*% daily_betas[i, ])
   }

@@ -28,13 +28,13 @@ dly_fit_from_sc(dly_sc, actual_yields = NULL,
   curves and maturity columns are matched by identity.}
   \item{mats}{Positive, unique, increasing numeric maturities in months. When omitted from
   \code{dly_fit_from_sc()}, maturities are inferred from the yield column names.}
-  \item{lambdas}{Candidate positive decay parameters in inverse maturity units.
+  \item{lambdas}{Candidate positive decay parameters in inverse months.
   A single value fixes the decay; otherwise each country minimizes its
   two-factor yield sum of squared errors over the supplied grid.}
   \item{curves}{Unique country names specifying the output order. Named yield
   lists are reordered to these identities, without relabelling countries.}
   \item{reference}{Country whose first principal-component loadings determine
-  the positive orientation of the global factors.}
+  the nonnegative orientation of the global factors.}
   \item{center, scale.}{Centering and scaling controls passed to
   \code{stats::prcomp()}.}
   \item{dly_sc}{Country fits returned by \code{dly_sc_fit_all()} or its
@@ -55,7 +55,9 @@ The \code{raw} yield component contains independent country fits.
 \code{global_plus_idiosyncratic} reconstructs \code{raw}.
 \code{dislocation_propagated} is a deterministic recursive path initialized at
 the first extracted state, with subsequent innovations set to zero. Transition
-parameters are estimated from the complete input sample.
+parameters are estimated from the complete input sample. This is an in-sample
+reconstruction, not an independently evaluated out-of-sample forecast. A
+Bayesian latent-factor estimation backend is not implemented in this PCA variant.
 
 \code{dly_all_sc()} is an alias for \code{dly_sc_fit_all()}, and
 \code{dly_fit_from_single_curve()} is an alias for \code{dly_fit_from_sc()}.
@@ -71,3 +73,25 @@ selected decay, time index, yield names, loadings, factors, and fitted yields.
 \code{dynamics}, and the alignment and units contract in \code{input_spec}.
 \code{dly_fit()} also records \code{lambda_grid}.
 }
+\examples{
+set.seed(31)
+mats <- c(1, 3, 6, 12, 24, 60)
+n <- 80
+time <- as.Date("2020-01-01") + seq_len(n) - 1
+global <- cbind(2 + cumsum(rnorm(n, sd = .03)),
+                -.5 + cumsum(rnorm(n, sd = .02)))
+yields <- setNames(lapply(c(0, .2, .4), function(shift) {
+  beta <- global + shift + matrix(rnorm(2 * n, sd = .015), n)
+  panel <- data.frame(time, beta \%*\% NS_loadings_ls(.35, mats))
+  names(panel)[-1] <- c("01M", "03M", "06M", "01Y", "02Y", "05Y")
+  panel
+}), c("usa", "gbr", "jpn"))
+fit <- dly_fit(yields, mats, lambdas = .35, reference = "usa")
+
+# Reuse the same country calibration through the staged workflow.
+country_fits <- dly_sc_fit_all(.35, yields, mats)
+staged <- dly_fit_from_sc(country_fits, actual_yields = yields, mats = mats)
+head(staged$yields$global_plus_idiosyncratic$gbr)
+}
+\seealso{\code{\link{NS_loadings}}, \code{\link{st_dly_shock}},
+\code{\link{estimation_inputs}}}

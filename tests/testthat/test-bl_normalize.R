@@ -35,6 +35,17 @@ test_that("phi stacking and permutation helpers preserve row counts and labels",
   expect_equal(nrow(phi_ct[[1]]), nrow(phi_hat))
 })
 
+test_that("transformed loading errors identify the failing observation", {
+  curve <- make_ns_curve_df(time = fixture_time[1:2])
+  phi <- make_check_phi(2)
+  phi[[2]][, 3] <- 0
+  expect_error(bln_rescale_beta_NS(curve[, -1], phi, fixture_mats),
+               "Transformed NS.*observation 2.*mats=.*could not be inverted.*rcond=")
+  phi[[2]][1, 1] <- Inf
+  expect_error(bln_rescale_beta_NS(curve[, -1], phi, fixture_mats),
+               "Transformed NS.*observation 2.*matrix contains nonfinite values")
+})
+
 test_that("bln_rescale_beta_NS and bln_normalized_fit reconstruct curve-level fits", {
   curve <- make_ns_curve_df()
   check_phi <- make_check_phi(nrow(curve))

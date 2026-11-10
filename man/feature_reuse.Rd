@@ -8,7 +8,7 @@ choices for cached MCE stress scenarios.
 \details{
 \code{mc_fit_shock(baseline_state = ...)} inherits omitted fitting controls from
 the saved baseline, even when they differ from the wrapper's defaults. Explicit
-controls are forwarded to \code{mc_fit_shock_from_baseline()}; its existing
+controls are forwarded to \code{mc_fit_shock_cached()}; its existing
 \code{NULL} convention means inheritance. Calls without a cache retain the
 ordinary baseline-fitting defaults. Supplied baseline-only inputs (yields,
 decay grid, cutoffs, curve order, maturity grid and reference) must agree with

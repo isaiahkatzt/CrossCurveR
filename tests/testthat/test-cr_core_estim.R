@@ -3,7 +3,7 @@ test_that("zero_mean_covreg returns correctly shaped covariance-regression outpu
   W <- cbind(seq(1, 10), seq(1, 10)^2)
   X <- cbind(1, seq(-1, 1, length.out = 10))
 
-  fit <- zero_mean_covreg(W, X, init = "static", max_iter = 5)
+  fit <- quiet_covreg(zero_mean_covreg(W, X, init = "static", max_iter = 5))
 
   expect_true(is.matrix(fit$S0))
   expect_true(is.matrix(fit$B))
@@ -16,9 +16,9 @@ test_that("zero_mean_covreg defaults to adaptive initialization", {
   X <- cbind(1, seq(-1, 1, length.out = 10))
 
   set.seed(123)
-  default_fit <- zero_mean_covreg(W, X, max_iter = 5)
+  default_fit <- quiet_covreg(zero_mean_covreg(W, X, max_iter = 5))
   set.seed(123)
-  adaptive_fit <- zero_mean_covreg(W, X, init = "adaptive", max_iter = 5)
+  adaptive_fit <- quiet_covreg(zero_mean_covreg(W, X, init = "adaptive", max_iter = 5))
 
   expect_identical(default_fit, adaptive_fit)
 })
@@ -35,17 +35,72 @@ test_that("zero_mean_covreg supports adaptive initialization and early terminati
   expect_lte(fit$iter, 20)
 })
 
+test_that("legacy covariance outputs share core fields across termination paths", {
+  W <- matrix(c(-1, .2, .5, -.4, 1.2, .8, -.3, 1.1, .7, -.6), ncol = 2, byrow = TRUE)
+  X <- cbind(1, seq(-1, 1, length.out = nrow(W)))
+  B <- matrix(.01, 2, 2)
+  core <- quiet_covreg(zero_mean_covreg_em(W, X, B = B, max_iter = 1, use_loglik = FALSE))
+  for (term in c(FALSE, TRUE)) for (limit in c(1, 20)) for (tolerance in c(1e-100, 1e8)) {
+    fit <- quiet_covreg(zero_mean_covreg(W, X, B = B, max_iter = limit,
+                                        tol = tolerance, term = term))
+    converged <- term && limit >= 10 && tolerance == 1e8
+    expect_true(all(names(core) %in% names(fit)))
+    expect_identical(fit$converged, converged)
+    expect_equal(fit$iter, if (converged) 10 else limit)
+    expect_identical(fit$termination_reason,
+                     if (converged) "converged" else if (term) "max_iter" else "not_assessed")
+    expect_null(fit$loglik)
+    expect_identical(fit$B_path, fit$b_est[seq_len(fit$iter + 1)])
+    expect_identical(fit$S0_path, fit$s_est[seq_len(fit$iter + 1)])
+    expect_identical(fit$B_path[[fit$iter + 1]], fit$B)
+    expect_identical(fit$S0_path[[fit$iter + 1]], fit$S0)
+    expect_true(all(is.finite(c(fit$mz, fit$vz, fit$sz))))
+    expect_length(fit$mz, nrow(W))
+    expect_equal(fit$sz^2, fit$vz)
+  }
+})
+
 test_that("covariance regression shrinkage can diagonalize S0", {
   set.seed(123)
   W <- cbind(seq(1, 10), seq(1, 10) + c(rep(0, 5), rep(3, 5)))
   X <- cbind(1, seq(-1, 1, length.out = 10))
 
-  fit_dense <- zero_mean_covreg_em(W, X, init = "static", max_iter = 3, S0_shrink_diag = 0)
-  fit_diag <- zero_mean_covreg_em(W, X, init = "static", max_iter = 3, S0_shrink_diag = 1)
+  fit_dense <- quiet_covreg(zero_mean_covreg_em(W, X, init = "static", max_iter = 3, S0_shrink_diag = 0))
+  fit_diag <- quiet_covreg(zero_mean_covreg_em(W, X, init = "static", max_iter = 3, S0_shrink_diag = 1))
 
   expect_gt(abs(fit_dense$S0[1, 2]), 0)
   expect_equal(fit_diag$S0[1, 2], 0, tolerance = 1e-10)
   expect_equal(fit_diag$S0_shrink_diag, 1)
+})
+
+test_that("residual sign reversal preserves covariances with later convergence checks", {
+  W <- matrix(c(-1, .2, .5, -.4, 1.2, .8, -.3, 1.1, .7, -.6),
+              ncol = 2, byrow = TRUE)
+  X <- cbind(1, seq(-1, 1, length.out = nrow(W)))
+
+  for (estimator in list(zero_mean_covreg_em, zero_mean_covreg, covreg_comp_estimator)) {
+    for (init in c("adaptive", "static")) {
+      args <- list(X = X, init = init, max_iter = 20, tol = 1e-8,
+                   S0_shrink_diag = 0.4)
+      legacy <- identical(estimator, zero_mean_covreg)
+      # The sign-normalized EM initialization can affect the first stopping check.
+      # Later checks isolate the covariance and coefficient-orientation contracts.
+      if (legacy) args$term <- TRUE else args$check_every <- 2
+
+      set.seed(451)
+      original <- quiet_covreg(do.call(estimator, c(list(W = W), args)))
+      original_rng <- .Random.seed
+      set.seed(451)
+      reversed <- quiet_covreg(do.call(estimator, c(list(W = -W), args)))
+
+      expect_equal(reversed$S0, original$S0, tolerance = 1e-12)
+      expect_equal(cr_build(reversed, X), cr_build(original, X), tolerance = 1e-12)
+      expect_identical(.Random.seed, original_rng)
+      expect_identical(reversed$iter, original$iter)
+      expected_B <- if (legacy && init == "adaptive") -original$B else original$B
+      expect_equal(reversed$B, expected_B, tolerance = 1e-12)
+    }
+  }
 })
 
 test_that("regularized estimators preserve the historical inversion ridge and score", {
@@ -61,7 +116,7 @@ test_that("regularized estimators preserve the historical inversion ridge and sc
   expected_mz <- expected_vz * rowSums((u %*% precision) * W)
 
   for (estimator in list(zero_mean_covreg_em, covreg_comp_estimator)) {
-    fit <- estimator(W, X, B = B0, S0 = S0, ridge_S0 = ridge, max_iter = 1)
+    fit <- quiet_covreg(estimator(W, X, B = B0, S0 = S0, ridge_S0 = ridge, max_iter = 1))
     expect_equal(fit$vz, expected_vz, tolerance = 1e-12)
     expect_equal(fit$mz, expected_mz, tolerance = 1e-12)
 
@@ -80,8 +135,9 @@ test_that("regularized estimators preserve the historical inversion ridge and sc
   }
 })
 
-test_that("EM estimates and convergence match the pre-correction reference", {
+test_that("fixed-iteration EM updates match the pre-correction reference", {
   # Reference values were generated from aee15d9^ before the ridge correction.
+  # Compare the same number of updates; convergence thresholds are tested separately.
   W <- matrix(c(-1, .2, .5, -.4, 1.2, .8, -.3, 1.1, .7, -.6), ncol = 2, byrow = TRUE)
   X <- cbind(1, seq(-1, 1, length.out = nrow(W)))
   expected <- list(zero_mean_covreg_em = list(adaptive = list(B = structure(c(-0.0854461763877651,
@@ -109,12 +165,50 @@ test_that("EM estimates and convergence match the pre-correction reference", {
                      covreg_comp_estimator = covreg_comp_estimator)
   for (name in names(estimators)) {
     for (init in c("adaptive", "static")) {
-      set.seed(451)
-      fit <- estimators[[name]](W, X, init = init, S0 = diag(c(.4, .6)),
-                               ridge_S0 = .2, max_iter = 4)
       reference <- expected[[name]][[init]]
+      set.seed(451)
+      fit <- quiet_covreg(estimators[[name]](W, X, init = init, S0 = diag(c(.4, .6)),
+                               ridge_S0 = .2, max_iter = reference$iter,
+                               check_every = reference$iter + 1))
+      reference$converged <- NULL
       expect_equal(fit[names(reference)], reference, tolerance = 1e-12)
+      expect_false(fit$converged)
     }
+  }
+})
+
+test_that("stored EM paths require tol-sized parameter changes", {
+  W <- matrix(c(-1, .2, .5, -.4, 1.2, .8, -.3, 1.1, .7, -.6),
+              ncol = 2, byrow = TRUE)
+  X <- cbind(1, seq(-1, 1, length.out = nrow(W)))
+  tolerance <- 1e-8
+
+  for (estimator in list(zero_mean_covreg_em, covreg_comp_estimator)) {
+    args <- list(W = W, X = X, init = "static", S0 = diag(c(.4, .6)),
+                 ridge_S0 = .2, max_iter = 1000, tol = tolerance, use_loglik = TRUE)
+    set.seed(451)
+    stored <- do.call(estimator, c(args, list(store_path = TRUE)))
+    stored_rng <- .Random.seed
+    set.seed(451)
+    unstored <- do.call(estimator, c(args, list(store_path = FALSE)))
+
+    expect_true(stored$converged)
+    expect_true(unstored$converged)
+    expect_identical(stored$iter, unstored$iter)
+    expect_equal(stored$B, unstored$B, tolerance = 1e-12)
+    expect_equal(stored$S0, unstored$S0, tolerance = 1e-12)
+    expect_identical(.Random.seed, stored_rng)
+    last <- length(stored$B_path)
+    expect_lt(Matrix::norm(stored$B_path[[last]] - stored$B_path[[last - 1]], "F"), tolerance)
+    expect_lt(Matrix::norm(stored$S0_path[[last]] - stored$S0_path[[last - 1]], "F"), tolerance)
+    expect_lt(abs(stored$loglik_path[last] - stored$loglik_path[last - 1]), tolerance)
+  }
+})
+
+test_that("covariance sample errors identify the requirement and received count", {
+  for (estimator in list(zero_mean_covreg_em, covreg_comp_estimator)) {
+    expect_error(estimator(matrix(c(1, 2), nrow = 1), matrix(1, 1, 1)),
+                 "Covariance regression: at least two observations are required; received 1")
   }
 })
 
@@ -138,8 +232,8 @@ test_that("one iteration remains valid without an intervening convergence check"
   W <- matrix(c(-1, .2, .5, -.4, 1.2, .8, -.3, 1.1, .7, -.6), ncol = 2, byrow = TRUE)
   X <- cbind(1, seq(-1, 1, length.out = nrow(W)))
   for (estimator in list(zero_mean_covreg_em, covreg_comp_estimator)) {
-    fit <- estimator(W, X, B = matrix(0, 2, 2), S0 = diag(2), max_iter = 1L,
-                     check_every = 2L, tol = 1e-8, store_path = FALSE)
+    fit <- quiet_covreg(estimator(W, X, B = matrix(0, 2, 2), S0 = diag(2), max_iter = 1L,
+                     check_every = 2L, tol = 1e-8, store_path = FALSE))
     expect_equal(fit$iter, 1)
     expect_false(fit$converged)
     expect_true(all(is.finite(c(fit$mz, fit$vz, fit$loglik))))

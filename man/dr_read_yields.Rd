@@ -33,3 +33,5 @@ names(panel)[-1] <- c(" x6m ", "12M")
 dr_normalize_maturity_names(panel)
 dr_build_curve(panel, nmats = c(6, 9, 12))
 }
+\seealso{\code{\link{dr_yield_format}}, \code{\link{dr_build_curve}},
+\code{\link{estimation_inputs}}}

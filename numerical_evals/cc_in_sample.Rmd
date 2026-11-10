@@ -388,6 +388,11 @@ mc_run_status
 mc_shrink_grid_results
 ```
 
+All reported errors are in-sample reconstruction errors. The DLY comparison
+uses `dislocation_propagated`: a deterministic recursive path initialized at
+the first extracted state, with transition parameters estimated over the
+complete annual window and subsequent innovations set to zero.
+
 ```{r curve-metrics}
 baseline_curve_metrics <- compute_curve_metrics(
   actual_annual_panels = annual_actual_panels,

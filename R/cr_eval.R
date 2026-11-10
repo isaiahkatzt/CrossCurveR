@@ -125,29 +125,3 @@ cr_synthetic <- function(N = 500, B, S0, X = NULL, intercept = TRUE, seed = NULL
     Sigma_true = Sigma_true
   )
 }
-
-#############################################
-#            Evaluation Helpers             #
-#############################################
-
-frobenius_error <- function(A, B) {
-  Matrix::norm(A - B, type = "F")
-}
-
-cov_array_mse <- function(S_hat, S_true) {
-  n <- dim(S_hat)[3]
-  mean(vapply(seq_len(n), function(i) {
-    mean((S_hat[, , i] - S_true[, , i])^2)
-  }, numeric(1)))
-}
-
-sign_align_B <- function(B_hat, B_true) {
-  err_plus  <- Matrix::norm(B_hat - B_true, type = "F")
-  err_minus <- Matrix::norm(-B_hat - B_true, type = "F")
-  if (err_plus <= err_minus) B_hat else -B_hat
-}
-
-is_psd <- function(S, tol = 1e-8) {
-  ev <- eigen((S + Matrix::t(S)) / 2, symmetric = TRUE, only.values = TRUE)$values
-  min(ev) > -tol
-}

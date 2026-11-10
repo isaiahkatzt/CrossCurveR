@@ -4,7 +4,9 @@
 
 dly_phi <- function(lambda_optim, mats) {
   phi <- NS_loadings_ls(lambda_optim, mats)
-  cross_phi <- Matrix::solve(Matrix::tcrossprod(phi)) %*% phi
+  cross_phi <- .bl_loading_inverse(Matrix::tcrossprod(phi),
+    sprintf("DLY country loading regression (lambda=%g; mats=[%s] months)",
+            lambda_optim, paste(mats, collapse = ", "))) %*% phi
   return(list(phi = phi, cross_phi = cross_phi))
 }
 

@@ -53,24 +53,32 @@ blmc_VAR <- function(blsc_list, reference, curves) {
 }
 
 blmc_ECM <- function(cc_betas, estim = "ML", type = "eigen", alpha = 0.1) {
-  lag_opt <- max(vars::VARselect(cc_betas, type = "const")$selection["SC(n)"], 2)
-  vecm_unrestricted <- tsDyn::VECM(cc_betas, lag = lag_opt - 1, estim = estim, include = "const")
-  r_test <- tsDyn::rank.test(vecm_unrestricted, type = type, cval = alpha)
-  r <- r_test$r
-  K <- ncol(cc_betas)
+  lag_opt <- NULL
+  tryCatch({
+    lag_opt <- max(vars::VARselect(cc_betas, type = "const")$selection["SC(n)"], 2)
+    vecm_unrestricted <- tsDyn::VECM(cc_betas, lag = lag_opt - 1, estim = estim, include = "const")
+    r_test <- tsDyn::rank.test(vecm_unrestricted, type = type, cval = alpha)
+    r <- r_test$r
+    K <- ncol(cc_betas)
 
-  ## tsDyn::VECM requires 1 <= r <= K - 1. Treat degenerate selections
-  ## as "no usable cointegration restriction" for downstream Xt construction.
-  if (!is.finite(r) || r <= 0 || r >= K) {
-    return(list(Gmatrix = 0, Fmatrix = 0, rank = 0))
-  }
+    ## tsDyn::VECM requires 1 <= r <= K - 1. Treat degenerate selections
+    ## as "no usable cointegration restriction" for downstream Xt construction.
+    if (!is.finite(r) || r <= 0 || r >= K) {
+      return(list(Gmatrix = 0, Fmatrix = 0, rank = 0))
+    }
 
-  vecm_restricted <- tsDyn::VECM(cc_betas, lag = lag_opt - 1, r = r, estim = estim, include = "const")
+    vecm_restricted <- tsDyn::VECM(cc_betas, lag = lag_opt - 1, r = r, estim = estim, include = "const")
 
-  ## round for floating point precision
-  Fmat <- round(tsDyn::coefA(vecm_restricted), 14)
-  Gmat <- round(tsDyn::coefB(vecm_restricted), 14)
-  return(list(Fmatrix = Fmat, Gmatrix = Gmat, rank = r))
+    ## round for floating point precision
+    Fmat <- round(tsDyn::coefA(vecm_restricted), 14)
+    Gmat <- round(tsDyn::coefB(vecm_restricted), 14)
+    return(list(Fmatrix = Fmat, Gmatrix = Gmat, rank = r))
+  }, error = function(e) {
+    stop("ECM estimation: failed (observations=", nrow(cc_betas),
+         ", variables=", ncol(cc_betas),
+         if (!is.null(lag_opt)) paste0(", VECM lag=", lag_opt - 1),
+         "): ", conditionMessage(e), call. = FALSE)
+  })
 }
 
 blmc_cspread <- function(cc_betas, Gmatrix, curve_name = NULL, normalize = TRUE) {
@@ -96,7 +104,13 @@ blmc_cspread <- function(cc_betas, Gmatrix, curve_name = NULL, normalize = TRUE)
 
   if (normalize) {
     Xt <- sweep(Xt, 2, colMeans(Xt), FUN = "-")
-    Xt <- sweep(Xt, 2, apply(Xt, 2, stats::sd), FUN = "/")
+    spread_sd <- apply(Xt, 2, stats::sd)
+    invalid_sd <- !is.finite(spread_sd) | spread_sd == 0
+    if (any(invalid_sd)) {
+      stop("Spread normalization: zero or nonfinite standard deviation for ",
+           paste(colnames(Xt)[invalid_sd], collapse = ", "), ".", call. = FALSE)
+    }
+    Xt <- sweep(Xt, 2, spread_sd, FUN = "/")
   }
   return(Xt)
 }
@@ -139,7 +153,7 @@ blcc_build_Xt <- function(cc_cspread, cc_ecm, trunc = FALSE) {
   }, logical(1)))
 
   if (length(valid_idx) == 0) {
-    stop("No usable cointegration relationships were identified for Xt construction.")
+    stop("Cointegration feature construction: no usable relationships were identified.", call. = FALSE)
   }
 
   if (!trunc) {
@@ -172,7 +186,10 @@ blcc_fe <- function(Xt, Wt, mats, covreg = zero_mean_covreg_em,
   ## baseline cross-curve feature extraction
   covreg_formals <- names(formals(covreg))
 
-  BS0_list <- lapply(Wt, function(Wj) {
+  tenor_indices <- seq_along(Wt)
+  names(tenor_indices) <- names(Wt)
+  BS0_list <- lapply(tenor_indices, function(i) {
+    Wj <- Wt[[i]]
     covreg_args <- list(
       W = Wj,
       X = Xt,
@@ -198,7 +215,26 @@ blcc_fe <- function(Xt, Wt, mats, covreg = zero_mean_covreg_em,
       covreg_args[[arg_name]] <- optional_args[[arg_name]]
     }
 
-    do.call(covreg, covreg_args)
+    withCallingHandlers(do.call(covreg, covreg_args),
+      crosscurver_nonconvergence = function(w) {
+        tenor <- names(Wt)[i]
+        maturity <- if (i <= length(mats)) mats[[i]] else NA_real_
+        if (is.null(tenor) || is.na(tenor) || !nzchar(tenor)) {
+          tenor <- if (is.finite(maturity)) numeric_to_matname(maturity) else paste("entry", i)
+        }
+        context <- paste0("Tenor ", tenor)
+        if (is.finite(maturity)) context <- paste0(context, " (", maturity, " months)")
+        if (!is.null(colnames(Wj))) {
+          context <- paste0(context, ", responses [", paste(colnames(Wj), collapse = ", "), "]")
+        }
+        w$tenor <- tenor
+        w$maturity_months <- maturity
+        w$response_names <- colnames(Wj)
+        w$message <- paste0(context, ": ", conditionMessage(w))
+        warning(w)
+        invokeRestart("muffleWarning")
+      }
+    )
   })
   return(BS0_list)
 }
@@ -236,8 +272,15 @@ tSigma_optim <- function(BS0, X) {
 #      Cointegration Spread Smoothers       #
 #############################################
 
+.fe_spline_time <- function(time) {
+  if (is.numeric(time) && !inherits(time, c("Date", "POSIXt"))) {
+    return(as.numeric(time))
+  }
+  as.numeric(as.Date(time))
+}
+
 fe_kp_quantile <- function(time, knot_count = 5) {
-  x <- as.numeric(as.Date(time))
+  x <- .fe_spline_time(time)
   probs <- seq(0, 1, length.out = knot_count + 2)
   knots <- stats::quantile(x, probs = probs)[-c(1, knot_count + 2)]
 
@@ -257,7 +300,7 @@ fe_spline_basis <- function(spline_type = c("ns", "bs"), degree = 3) {
 fe_xt_spline <- function(time, xt, knot_points, spline_fit = c("ns", "bs"), degree = 3) {
   ## cspread smoothing
   spline_basis <- fe_spline_basis(spline_fit, degree)
-  time <- as.numeric(as.Date(time))
+  time <- .fe_spline_time(time)
 
   basis_matrix <- spline_basis(time, knots = knot_points)
 

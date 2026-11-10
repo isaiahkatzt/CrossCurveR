@@ -1,3 +1,12 @@
+test_that("loading inverse diagnostics retain the solver's conditioning policy", {
+  gram <- diag(c(1, 1e-14))
+  expect_identical(.bl_loading_inverse(gram, "Test loading regression"), Matrix::solve(gram))
+  expect_error(.bl_loading_inverse(matrix(0, 1, 1), "Test loading regression"),
+               "Test loading regression.*could not be inverted.*rcond=")
+  expect_error(.bl_loading_inverse(Matrix::Diagonal(x = c(1, 1e-320)), "Test loading regression"),
+               "Test loading regression.*inverse contains nonfinite values")
+})
+
 test_that("symmPSD_sqrt reconstructs positive semidefinite matrices", {
   Sigma <- matrix(c(2, 1, 1, 2), nrow = 2)
   sqrt_sigma <- symmPSD_sqrt(Sigma)

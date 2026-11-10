@@ -51,13 +51,17 @@ lambda_grid_search <- function(lambda_grid, yields, mats, loss = l2_loss_lambda)
 
 bl_phi <- function(lambda_optim, mats) {
   phi <- NS_loadings(lambda_optim, mats)
-  cross_phi <- Matrix::solve(Matrix::tcrossprod(phi)) %*% phi
+  cross_phi <- .bl_loading_inverse(Matrix::tcrossprod(phi),
+    sprintf("NS loading regression (lambda=%g; mats=[%s] months)",
+            lambda_optim, paste(mats, collapse = ", "))) %*% phi
   return(list(phi = phi, cross_phi = cross_phi))
 }
 
 sven_phi <- function(lambda1, lambda2, mats) {
   phi <- Svensson_loadings(lambda1, lambda2, mats)
-  cross_phi <- Matrix::solve(Matrix::tcrossprod(phi)) %*% phi
+  cross_phi <- .bl_loading_inverse(Matrix::tcrossprod(phi),
+    sprintf("Svensson loading regression (lambda1=%g, lambda2=%g; mats=[%s] months)",
+            lambda1, lambda2, paste(mats, collapse = ", "))) %*% phi
   return(list(phi = phi, cross_phi = cross_phi))
 }
 
@@ -70,8 +74,34 @@ bl_NSbetas <- function(yield, lambda_optim, cross_phi, mats) {
 
 bl_NSfit <- function(matrix_yield, phi, NSbetas, lambda_optim, mats) {
   NSfit <- NSbetas %*% phi
-  residual <- NSfit - matrix_yield
+  # Yield residuals use the observation-minus-fit convention.
+  residual <- matrix_yield - NSfit
+  # Preserve the previous residual labels when the fitted matrix has dimnames.
+  if (!is.null(dimnames(NSfit))) dimnames(residual) <- dimnames(NSfit)
   return(list(NSfit = NSfit, W = residual))
+}
+
+.bl_warn_h_psd <- function(H, cutoffs, mats, n_obs) {
+  values <- if (all(is.finite(H))) {
+    tryCatch(eigen(H, symmetric = TRUE, only.values = TRUE)$values,
+             error = function(e) NULL)
+  } else NULL
+  assessed <- !is.null(values) && all(is.finite(values))
+  minimum <- if (assessed) min(values) else NA_real_
+  tolerance <- if (assessed) 1e-8 * max(abs(values)) else NA_real_
+  if (assessed && minimum >= -tolerance) return(invisible(NULL))
+
+  diagnosis <- if (assessed) {
+    sprintf("H is not PSD under this cutoff configuration (minimum eigenvalue=%.6g; PSD tolerance=%.3e)",
+            minimum, tolerance)
+  } else "H PSD could not be assessed (nonfinite matrix entries or unavailable eigenvalues)"
+  warning(structure(list(
+    message = sprintf(
+      "Within-curve %s; cutoffs=[%s]; mats=[%s] months; N=%d. Returning H unchanged.",
+      diagnosis, paste(cutoffs, collapse = ", "), paste(mats, collapse = ", "), n_obs),
+    call = NULL, minimum_eigenvalue = minimum, psd_tolerance = tolerance,
+    psd_assessed = assessed, cutoffs = cutoffs, mats = mats, n_observations = n_obs
+  ), class = c("crosscurver_h_not_psd", "warning", "condition")))
 }
 
 bl_bdiag_H <- function(Wt, rate_cutoffs, mats) {
@@ -120,6 +150,7 @@ bl_bdiag_H <- function(Wt, rate_cutoffs, mats) {
   H_matrix[ml_idx[1], ml_idx[2]] <- sigma_ML[1, 2]
   H_matrix[ml_idx[2], ml_idx[1]] <- sigma_ML[1, 2]
 
+  .bl_warn_h_psd(H_matrix, rate_cutoffs, mats, nrow(Wt))
   return(H_matrix)
 }
 

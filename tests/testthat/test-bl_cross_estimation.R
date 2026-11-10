@@ -47,8 +47,8 @@ test_that("single-curve preparation recovers distinct NS curves in curve and ten
     usa = make_ns_curve_df(lambda = .2),
     gbr = make_ns_curve_df(lambda = .5, curve_shift = .2)
   )
-  state <- .bl_prepare_single_curve_state(yields, c(.2, .5), c(2, 4),
-                                           fixture_curves, fixture_mats)
+  state <- quiet_h(.bl_prepare_single_curve_state(yields, c(.2, .5), c(2, 4),
+                                           fixture_curves, fixture_mats))
   expect_equal(state$lambdas, c(usa = .2, gbr = .5))
   expect_identical(names(state$bl_yields$nsfit), fixture_curves)
   for (curve in fixture_curves) {
@@ -160,6 +160,29 @@ test_that("mc_fit_end assembles the expected top-level output structure", {
   )
   expect_s3_class(result$tenor, "data.frame")
   expect_equal(nrow(result$Xt), length(fake_time))
+})
+
+test_that("MCE and MCX spline fits preserve numeric observation indices", {
+  time <- -5 + cumsum(seq_along(fixture_time)^1.3) / 10
+  yields <- lapply(make_pair_yields(), function(panel) { panel$time <- time; panel })
+  Xt <- cbind(spread = sin(seq_along(time)))
+  covariance <- function(W, X, ...) {
+    list(S0 = diag(ncol(W)), B = matrix(0, ncol(W), ncol(X)))
+  }
+  for (kind in c("ns", "bs")) {
+    args <- list(yields = yields, lambdas = .35, cutoffs = c(2, 4), reference = "usa",
+                 curves = fixture_curves, mats = fixture_mats, Xt_smooth = TRUE,
+                 smoother = kind, knot_count = 3, CR_algo = covariance)
+    exo <- quiet_h(do.call(mc_fit_exo, c(args, list(Xt = Xt))))
+    end <- with_temp_bindings(list(blcc_cointegration = function(...) {
+      list(cc_cspread = list(gbr = Xt), cc_ecm = list(gbr = list(rank = 1)), cc_beta = list())
+    }), quiet_h(do.call(mc_fit_end, args)))
+    for (fit in list(exo, end)) {
+      expect_identical(fit$curve$time, time)
+      expect_identical(fit$tenor$time, time)
+      expect_equal(fit$Xt, blce_smooth_Xt(Xt, time, kind, knot_count = 3))
+    }
+  }
 })
 
 test_that("mc_fit_exo assembles the expected top-level output structure", {

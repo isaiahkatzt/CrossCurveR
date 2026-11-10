@@ -56,8 +56,8 @@ st_build_shock_matrix <- function(curves, model_factors = c("L", "S", "C"),
   shock_values <- rep(NA_real_, length(model_factors))
   names(shock_values) <- model_factors
 
-  if (!is.numeric(magnitude) || anyNA(magnitude)) {
-    stop("`magnitude` must be numeric and cannot contain NA values.")
+  if (!is.numeric(magnitude) || any(!is.finite(magnitude))) {
+    stop("`magnitude` must contain only finite numeric values.", call. = FALSE)
   }
 
   if (length(magnitude) == 1) {
@@ -174,11 +174,7 @@ st_additive <- function(curves, curve_dns_factor, shock_curves, shock_factors,
   shock_matrix[is.na(shock_matrix)] <- 0
 
   shocked_curve_dns_factor <- stats::setNames(lapply(names(curve_dns_factor), function(curve_name) {
-    curve_factor_mat <- as.matrix(curve_dns_factor[[curve_name]])
-
-    if (ncol(curve_factor_mat) != factor_dim) {
-      stop("All `curve_dns_factor` entries must have the same number of columns.")
-    }
+    curve_factor_mat <- .st_factor_matrix(curve_dns_factor[[curve_name]], model_factors)
 
     if (!curve_name %in% colnames(shock_matrix)) {
       stop("Each named `curve_dns_factor` entry must correspond to a column in the shock matrix.")
@@ -242,11 +238,7 @@ st_multiplicative <- function(curves, curve_dns_factor, shock_curves, shock_fact
   shock_matrix <- shock_matrix + 1
 
   shocked_curve_dns_factor <- stats::setNames(lapply(names(curve_dns_factor), function(curve_name) {
-    curve_factor_mat <- as.matrix(curve_dns_factor[[curve_name]])
-
-    if (ncol(curve_factor_mat) != factor_dim) {
-      stop("All `curve_dns_factor` entries must have the same number of columns.")
-    }
+    curve_factor_mat <- .st_factor_matrix(curve_dns_factor[[curve_name]], model_factors)
 
     if (!curve_name %in% colnames(shock_matrix)) {
       stop("Each named `curve_dns_factor` entry must correspond to a column in the shock matrix.")
