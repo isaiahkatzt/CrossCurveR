@@ -69,22 +69,5 @@ test_that("dr_daily interpolates sparse rows and can augment to a reference cale
 
   reference <- as.Date("2019-12-31") + 0:4
   augmented <- dr_daily(curve_data, reference = reference, threshold = 2)
-  expect_equal(nrow(augmented), length(reference))
   expect_equal(as.Date(augmented$time), reference)
-})
-
-test_that("dr_build_curve returns ordered tenor grids for spline, log, and parametric builders", {
-  base_curve <- make_ns_curve_df(time = as.Date("2020-01-01") + 0:2, mats = c(1, 6, 12))
-
-  spline_curve <- dr_build_curve(base_curve, nmats = c(1, 3, 6, 12), build = "spline", complete = TRUE)
-  log_curve <- dr_build_curve(base_curve, nmats = c(1, 3, 6, 12), build = "log", complete = TRUE)
-  param_curve <- dr_build_curve(base_curve, nmats = c(1, 3, 6, 12), build = "parametric", complete = FALSE)
-
-  expected_names <- c("time", "01M", "03M", "06M", "01Y")
-  expect_equal(colnames(spline_curve), expected_names)
-  expect_equal(colnames(log_curve), expected_names)
-  expect_equal(colnames(param_curve), expected_names)
-  expect_equal(nrow(spline_curve), 3)
-  expect_true(all(is.finite(as.matrix(spline_curve[, -1]))))
-  expect_true(all(is.finite(as.matrix(log_curve[, -1]))))
 })

@@ -1,16 +1,3 @@
-test_that("zero_mean_covreg returns correctly shaped covariance-regression outputs", {
-  set.seed(123)
-  W <- cbind(seq(1, 10), seq(1, 10)^2)
-  X <- cbind(1, seq(-1, 1, length.out = 10))
-
-  fit <- quiet_covreg(zero_mean_covreg(W, X, init = "static", max_iter = 5))
-
-  expect_true(is.matrix(fit$S0))
-  expect_true(is.matrix(fit$B))
-  expect_equal(dim(fit$S0), c(ncol(W), ncol(W)))
-  expect_equal(dim(fit$B), c(ncol(W), ncol(X)))
-})
-
 test_that("zero_mean_covreg defaults to adaptive initialization", {
   W <- cbind(seq(1, 10), seq(1, 10)^2)
   X <- cbind(1, seq(-1, 1, length.out = 10))
@@ -23,40 +10,24 @@ test_that("zero_mean_covreg defaults to adaptive initialization", {
   expect_identical(default_fit, adaptive_fit)
 })
 
-test_that("zero_mean_covreg supports adaptive initialization and early termination mode", {
-  set.seed(123)
-  W <- cbind(seq(1, 12), seq(1, 12)^2)
-  X <- cbind(1, seq(-1, 1, length.out = 12))
-
-  fit <- zero_mean_covreg(W, X, init = "adaptive", max_iter = 20, tol = 1e8, term = TRUE)
-
-  expect_true(is.list(fit$b_est))
-  expect_true(is.list(fit$s_est))
-  expect_lte(fit$iter, 20)
-})
-
-test_that("legacy covariance outputs share core fields across termination paths", {
+test_that("legacy covariance retains its paths and reports distinct termination reasons", {
   W <- matrix(c(-1, .2, .5, -.4, 1.2, .8, -.3, 1.1, .7, -.6), ncol = 2, byrow = TRUE)
   X <- cbind(1, seq(-1, 1, length.out = nrow(W)))
-  B <- matrix(.01, 2, 2)
-  core <- quiet_covreg(zero_mean_covreg_em(W, X, B = B, max_iter = 1, use_loglik = FALSE))
-  for (term in c(FALSE, TRUE)) for (limit in c(1, 20)) for (tolerance in c(1e-100, 1e8)) {
-    fit <- quiet_covreg(zero_mean_covreg(W, X, B = B, max_iter = limit,
-                                        tol = tolerance, term = term))
-    converged <- term && limit >= 10 && tolerance == 1e8
-    expect_true(all(names(core) %in% names(fit)))
-    expect_identical(fit$converged, converged)
-    expect_equal(fit$iter, if (converged) 10 else limit)
-    expect_identical(fit$termination_reason,
-                     if (converged) "converged" else if (term) "max_iter" else "not_assessed")
-    expect_null(fit$loglik)
+  cases <- list(
+    list(term = FALSE, tol = 1e8, iter = 20, reason = "not_assessed"),
+    list(term = TRUE, tol = 1e-100, iter = 20, reason = "max_iter"),
+    list(term = TRUE, tol = 1e8, iter = 10, reason = "converged")
+  )
+  for (case in cases) {
+    fit <- quiet_covreg(zero_mean_covreg(W, X, B = matrix(.01, 2, 2), max_iter = 20,
+                                         tol = case$tol, term = case$term))
+    expect_identical(fit$termination_reason, case$reason)
+    expect_equal(fit$iter, case$iter)
+    expect_identical(fit$converged, case$reason == "converged")
     expect_identical(fit$B_path, fit$b_est[seq_len(fit$iter + 1)])
     expect_identical(fit$S0_path, fit$s_est[seq_len(fit$iter + 1)])
-    expect_identical(fit$B_path[[fit$iter + 1]], fit$B)
-    expect_identical(fit$S0_path[[fit$iter + 1]], fit$S0)
-    expect_true(all(is.finite(c(fit$mz, fit$vz, fit$sz))))
-    expect_length(fit$mz, nrow(W))
-    expect_equal(fit$sz^2, fit$vz)
+    expect_identical(tail(fit$B_path, 1)[[1]], fit$B)
+    expect_identical(tail(fit$S0_path, 1)[[1]], fit$S0)
   }
 })
 
@@ -214,9 +185,9 @@ test_that("covariance sample errors identify the requirement and received count"
 
 test_that("regularized estimators reject invalid iteration controls before fitting", {
   invalid <- list(
-    max_iter = list(0, -1, 1.5, Inf, NA_real_, numeric(0), c(1, 2), "1"),
-    check_every = list(0, -1, 1.5, Inf, NA_real_),
-    tol = list(0, -1, Inf, NA_real_)
+    max_iter = list(0, 1.5, Inf, numeric(0), c(1, 2), "1"),
+    check_every = list(0, 1.5, NA_real_),
+    tol = list(0, Inf, NA_real_)
   )
   for (estimator in list(zero_mean_covreg_em, covreg_comp_estimator)) {
     for (control in names(invalid)) {

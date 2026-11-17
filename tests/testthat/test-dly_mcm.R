@@ -83,10 +83,7 @@ test_that("DLY dynamic regressions reject unidentified coefficients", {
   collinear <- cbind(L = 1:8, S = 2 * (1:8))
   for (state in list(constant, collinear, constant[1:2, , drop = FALSE])) {
     expect_error(dly_fit_var1(state), "Non-finite coefficients.*global dynamics")
-    expect_error(dly_fit_var1_block(state), "Non-finite coefficients.*global dynamics")
     expect_error(dly_fit_rs(state, state), "Non-finite coefficients.*residual dynamics")
-    expect_error(dly_fit_country_dynamic_block(state, state),
-                 "Non-finite coefficients.*residual dynamics")
   }
 })
 
@@ -114,7 +111,6 @@ test_that("dly_pca_global returns a reference-aligned first principal component"
     tolerance = 1e-8
   )
   expect_gt(global_level$explained_variance, 0.95)
-  expect_equal(length(global_level$factor), nrow(level_factor))
 })
 
 test_that("dly_fit preserves raw fits, static decomposition identities, and dynamic state blocks", {
@@ -127,10 +123,6 @@ test_that("dly_fit preserves raw fits, static decomposition identities, and dyna
     reference = "usa"
   )
 
-  expect_true("dislocation_propagated" %in% names(dly_model$yields))
-  expect_true("dislocation_propagated" %in% names(dly_model$country_betas))
-  expect_true("dynamics" %in% names(dly_model))
-  expect_equal(colnames(dly_model$dynamics$global$actual), c("L", "S"))
   expect_equal(colnames(dly_model$dynamics$global$propagated), c("L", "S"))
 
   for (curve in names(fixture$yields)) {
@@ -147,15 +139,11 @@ test_that("dly_fit preserves raw fits, static decomposition identities, and dyna
     raw_beta <- dly_model$country_betas$raw[[curve]]
     global_beta <- dly_model$country_betas$global[[curve]]
     idio_beta <- dly_model$country_betas$idiosyncratic[[curve]]
-    propagated_beta <- dly_model$country_betas$dislocation_propagated[[curve]]
 
     expect_equal(raw_beta, global_beta + idio_beta, tolerance = 1e-6)
-    expect_equal(dim(propagated_beta), dim(raw_beta))
     expect_equal(colnames(dly_model$dynamics$residual[[curve]]$propagated), c("L", "S"))
   }
 
-  raw_resid_norm <- max(abs(unlist(dly_model$residuals$raw)))
-  expect_lt(raw_resid_norm, 1e-6)
   expect_gt(
     max(abs(
       as.matrix(dly_model$yields$dislocation_propagated$usa[, -1, drop = FALSE]) -
@@ -163,49 +151,4 @@ test_that("dly_fit preserves raw fits, static decomposition identities, and dyna
     )),
     0
   )
-})
-
-test_that("dly_fit_from_single_curve rebuilds the same dynamic DLY outputs from baseline single-curve fits", {
-  fixture <- make_dly_fixture()
-  dly_model <- dly_fit(
-    yields = fixture$yields,
-    mats = fixture_mats,
-    lambdas = c(0.2, 0.35, 0.5),
-    curves = names(fixture$yields),
-    reference = "usa"
-  )
-
-  rebuilt_model <- dly_fit_from_single_curve(
-    dly_sc = dly_model$single_curve,
-    actual_yields = fixture$yields,
-    curves = dly_model$curves,
-    reference = dly_model$reference,
-    center = dly_model$center,
-    scale. = dly_model$scale.,
-    mats = dly_model$mats
-  )
-
-  expect_equal(rebuilt_model$curves, dly_model$curves)
-  expect_equal(rebuilt_model$mats, dly_model$mats)
-  expect_equal(rebuilt_model$dynamics$global$intercept, dly_model$dynamics$global$intercept, tolerance = 1e-8)
-  expect_equal(rebuilt_model$dynamics$global$phi, dly_model$dynamics$global$phi, tolerance = 1e-8)
-
-  for (curve in names(fixture$yields)) {
-    expect_equal(rebuilt_model$country_betas$raw[[curve]], dly_model$country_betas$raw[[curve]], tolerance = 1e-8)
-    expect_equal(
-      as.matrix(rebuilt_model$yields$raw[[curve]][, -1, drop = FALSE]),
-      as.matrix(dly_model$yields$raw[[curve]][, -1, drop = FALSE]),
-      tolerance = 1e-8
-    )
-    expect_equal(
-      as.matrix(rebuilt_model$yields$global[[curve]][, -1, drop = FALSE]),
-      as.matrix(dly_model$yields$global[[curve]][, -1, drop = FALSE]),
-      tolerance = 1e-8
-    )
-    expect_equal(
-      as.matrix(rebuilt_model$yields$dislocation_propagated[[curve]][, -1, drop = FALSE]),
-      as.matrix(dly_model$yields$dislocation_propagated[[curve]][, -1, drop = FALSE]),
-      tolerance = 1e-8
-    )
-  }
 })

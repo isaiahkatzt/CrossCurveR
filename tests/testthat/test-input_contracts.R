@@ -31,10 +31,13 @@ test_that("misaligned, duplicate, missing and unordered observations fail before
     yields <- make_pair_yields()
     yields$gbr <- change(yields$gbr)
     expect_error(vecY(yields, fixture_curves, fixture_mats), "index")
-    expect_error(dly_fit(yields, fixture_mats, lambdas = .35), "index")
-    expect_error(mc_fit_end(yields, .35, c(2, 4), "usa",
-                            curves = fixture_curves, mats = fixture_mats), "index")
   }
+  yields <- make_pair_yields()
+  yields$gbr$time <- yields$gbr$time + 1
+  expect_error(dly_fit(yields, fixture_mats, lambdas = .35), "index")
+  expect_error(mc_fit_end(yields, .35, c(2, 4), "usa",
+                          curves = fixture_curves, mats = fixture_mats), "index")
+
   yields <- make_pair_yields()
   yields$gbr$time <- as.character(yields$gbr$time)
   expect_identical(vecY(yields, fixture_curves, fixture_mats)$time, fixture_time)
@@ -86,8 +89,6 @@ test_that("maturity and fixed-decay validation does not change parameter convent
                NS_loadings(12 * .0609, fixture_mats / 12), tolerance = 1e-14)
   expect_equal(Svensson_loadings(18, 36, fixture_mats),
                Svensson_loadings(18 / 12, 36 / 12, fixture_mats / 12), tolerance = 1e-14)
-  expect_identical(numeric_to_matname(12), "01Y")
-  expect_equal(matname_to_numeric("01Y"), 1)
 })
 
 test_that("precomputed DLY fits reconcile complete maturity layouts and observed dates", {

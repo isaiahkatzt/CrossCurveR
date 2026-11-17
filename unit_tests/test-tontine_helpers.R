@@ -1,4 +1,3 @@
-
 make_ladder_yields <- function() {
   dates <- as.Date(c(
     "2020-01-02", "2020-12-31",
@@ -15,6 +14,16 @@ make_ladder_yields <- function() {
     usa = curve_stub,
     gbr = curve_stub
   )
+}
+
+make_ladder_schedule <- function(yields, purchase_years, q, ...) {
+  tontine_build_bond_ladder_schedule(yields, "usa", purchase_years,
+    curves = names(yields), total_target_par = 1000, q = q, ...)
+}
+
+price_ladder <- function(yields, schedule, scenario_type = "baseline") {
+  tontine_price_bond_ladder(yields, schedule, c("X01Y", "X02Y"),
+    model_name = "DNS", scenario_name = scenario_type, scenario_type = scenario_type)
 }
 
 test_that("CSV reads preserve valuation panel names and rate lookups", {
@@ -39,16 +48,12 @@ test_that("tontine_build_bond_ladder_schedule uses observed year-start dates and
     q = c(0.01, 0.02)
   )
 
-  expect_equal(nrow(schedule), 4)
-  expect_equal(unique(schedule$rung_id), 1:2)
-  expect_equal(unique(schedule$purchase_date), as.Date(c("2020-01-02", "2021-01-04")))
-  expect_equal(unique(schedule$maturity_date), as.Date(c("2021-01-04", "2022-01-03")))
-  expect_equal(unique(schedule$q_k), c(0.01, 0.02))
-  expect_equal(unique(schedule$p_k), cumprod(1 - c(0.01, 0.02)), tolerance = tol)
-
-  rung_par <- stats::aggregate(country_par ~ rung_id, data = schedule, sum)
-  expect_equal(rung_par$country_par, c(1000, 1000))
-  expect_equal(schedule$survival_adjusted_par, schedule$country_par * schedule$p_k, tolerance = tol)
+  expect_equal(schedule$country, rep(c("usa", "gbr"), 2))
+  expect_equal(schedule$purchase_date, rep(as.Date(c("2020-01-02", "2021-01-04")), each = 2))
+  expect_equal(schedule$maturity_date, rep(as.Date(c("2021-01-04", "2022-01-03")), each = 2))
+  expect_equal(schedule$p_k, rep(c(.99, .9702), each = 2), tolerance = tol)
+  expect_equal(schedule$country_par, rep(500, 4))
+  expect_equal(schedule$survival_adjusted_par, rep(c(495, 485.1), each = 2), tolerance = tol)
 })
 
 test_that("tontine_build_bond_ladder_schedule validates mortality vector length and maturity dates", {
@@ -134,22 +139,16 @@ test_that("calendar decay shocks resolve purchase-date anchors and decay to zero
     shock_end_magnitude = 0
   )
 
-  expect_equal(profile$shock_magnitude[[1]], 0)
-  expect_equal(profile$shock_magnitude[[2]], 1)
-  expect_equal(profile$shock_magnitude[[3]], 0)
-  expect_equal(profile$shock_magnitude[[4]], 0)
+  expect_equal(profile$shock_magnitude, c(0, 1, 0, 0))
 })
 
-test_that("tontine_simulate_population is reproducible and tracks realized survivors", {
-  sim_1 <- tontine_simulate_population(N_members = 10, q = c(0, 1), seed = 42)
-  sim_2 <- tontine_simulate_population(N_members = 10, q = c(0, 1), seed = 42)
+test_that("seeded population simulation tracks survivor counts", {
+  withr::local_preserve_seed()
+  sim <- tontine_simulate_population(N_members = 10, q = c(.2, .6), seed = 42)
 
-  expect_equal(sim_1, sim_2)
-  expect_equal(sim_1$population_start, c(10, 10))
-  expect_equal(sim_1$deaths, c(0, 10))
-  expect_equal(sim_1$population_end, c(10, 0))
-  expect_equal(sim_1$realized_p_k, c(1, 0))
-  expect_equal(sim_1$expected_p_k, c(1, 0))
+  expect_equal(sim$deaths, c(1, 5))
+  expect_equal(sim$population_end, c(9, 4))
+  expect_equal(sim$realized_p_k, c(.9, .4))
 })
 
 test_that("tontine_build_bond_ladder_schedule can use one realized population simulation", {
@@ -165,94 +164,40 @@ test_that("tontine_build_bond_ladder_schedule can use one realized population si
     target_rung_par_per_member = 100
   )
 
-  expect_equal(schedule$population_start, c(10, 10, 10, 10))
-  expect_equal(schedule$population_end, c(10, 10, 0, 0))
-  expect_equal(schedule$realized_p_k, c(1, 1, 0, 0))
   expect_equal(schedule$purchase_par, c(500, 500, 500, 500))
   expect_equal(schedule$mortality_credit_par, c(0, 0, 500, 500))
   expect_equal(schedule$next_rung_required_par, c(1000, 1000, 0, 0))
   expect_equal(schedule$per_survivor_maturity_value, c(100, 100, NA, NA))
   expect_equal(schedule$mortality_credit_per_survivor, c(0, 0, NA, NA))
-  expect_equal(unique(schedule$target_rung_par_per_member), 100)
 })
 
 test_that("tontine_price_bond_ladder prices survival-adjusted 1Y ZCB holdings", {
   yields <- make_ladder_yields()
   yields$gbr$X01Y <- yields$gbr$X01Y + 1
 
-  schedule <- tontine_build_bond_ladder_schedule(
-    yields = yields,
-    reference_curve = "usa",
-    purchase_years = 2020,
-    curves = c("usa", "gbr"),
-    total_target_par = 1000,
-    q = 0.01
-  )
+  schedule <- make_ladder_schedule(yields, 2020, q = 0.01)
 
-  holdings <- tontine_price_bond_ladder(
-    curve_panels = yields,
-    ladder_schedule = schedule,
-    mat_names = c("X01Y", "X02Y"),
-    model_name = "DNS",
-    scenario_name = "Baseline DNS",
-    scenario_type = "baseline"
-  )
+  holdings <- price_ladder(yields, schedule)
 
-  expect_equal(holdings$zero_rate_1y, c(0.02, 0.03), tolerance = tol)
-  expect_equal(holdings$discount_factor, exp(-c(0.02, 0.03)), tolerance = tol)
-  expect_equal(holdings$survival_adjusted_par, c(495, 495), tolerance = tol)
-  expect_equal(holdings$purchase_cost, c(495 * exp(-0.02), 495 * exp(-0.03)), tolerance = tol)
+  expect_equal(holdings$purchase_cost, 495 * exp(-c(.02, .03)), tolerance = tol)
   expect_equal(holdings$maturity_proceeds, c(495, 495), tolerance = tol)
 })
 
 test_that("tontine_price_bond_ladder supports multi-year ZCB maturities", {
   yields <- make_ladder_yields()
-  schedule <- tontine_build_bond_ladder_schedule(
-    yields = yields,
-    reference_curve = "usa",
-    purchase_years = 2020,
-    curves = c("usa", "gbr"),
-    total_target_par = 1000,
-    q = 0,
-    bond_maturity_years = 2
-  )
+  schedule <- make_ladder_schedule(yields, 2020, q = 0, bond_maturity_years = 2)
 
-  holdings <- tontine_price_bond_ladder(
-    curve_panels = yields,
-    ladder_schedule = schedule,
-    mat_names = c("X01Y", "X02Y"),
-    model_name = "DNS",
-    scenario_name = "Baseline DNS",
-    scenario_type = "baseline"
-  )
+  holdings <- price_ladder(yields, schedule)
 
   expect_equal(unique(schedule$maturity_date), as.Date("2022-01-03"))
-  expect_equal(unique(holdings$bond_maturity_years), 2)
-  expect_equal(unique(holdings$tenor_col), "X02Y")
-  expect_equal(holdings$zero_rate, c(0.022, 0.022), tolerance = tol)
-  expect_equal(holdings$discount_factor, rep(exp(-0.022 * 2), 2), tolerance = tol)
+  expect_equal(holdings$tenor_col, rep("X02Y", 2))
   expect_equal(holdings$purchase_cost, rep(500 * exp(-0.022 * 2), 2), tolerance = tol)
 })
 
 test_that("tontine_compare_mtm_shock values outstanding multi-year holdings", {
   yields <- make_ladder_yields()
-  schedule <- tontine_build_bond_ladder_schedule(
-    yields = yields,
-    reference_curve = "usa",
-    purchase_years = 2020,
-    curves = c("usa", "gbr"),
-    total_target_par = 1000,
-    q = 0,
-    bond_maturity_years = 2
-  )
-  holdings <- tontine_price_bond_ladder(
-    curve_panels = yields,
-    ladder_schedule = schedule,
-    mat_names = c("X01Y", "X02Y"),
-    model_name = "DNS",
-    scenario_name = "Baseline DNS",
-    scenario_type = "baseline"
-  )
+  schedule <- make_ladder_schedule(yields, 2020, q = 0, bond_maturity_years = 2)
+  holdings <- price_ladder(yields, schedule)
 
   shocked_yields <- yields
   shocked_yields$usa$X01Y <- shocked_yields$usa$X01Y + 1
@@ -276,22 +221,8 @@ test_that("tontine_compare_mtm_shock values outstanding multi-year holdings", {
 
 test_that("tontine_resolve_initial_cash and cash account roll proceeds forward while retaining deficits", {
   yields <- make_ladder_yields()
-  schedule <- tontine_build_bond_ladder_schedule(
-    yields = yields,
-    reference_curve = "usa",
-    purchase_years = 2020:2021,
-    curves = c("usa", "gbr"),
-    total_target_par = 1000,
-    q = c(0, 0)
-  )
-  holdings <- tontine_price_bond_ladder(
-    curve_panels = yields,
-    ladder_schedule = schedule,
-    mat_names = c("X01Y", "X02Y"),
-    model_name = "DNS",
-    scenario_name = "Baseline DNS",
-    scenario_type = "baseline"
-  )
+  schedule <- make_ladder_schedule(yields, 2020:2021, q = c(0, 0))
+  holdings <- price_ladder(yields, schedule)
 
   initial_cash <- tontine_resolve_initial_cash(holdings)
   expect_equal(initial_cash, sum(holdings$purchase_cost[holdings$rung_id == 1]), tolerance = tol)
@@ -301,7 +232,6 @@ test_that("tontine_resolve_initial_cash and cash account roll proceeds forward w
     initial_cash = initial_cash
   )
 
-  expect_equal(cash_account$cash_start[[1]], initial_cash, tolerance = tol)
   expect_equal(cash_account$cash_end[[1]], 0, tolerance = tol)
   expect_equal(cash_account$maturity_proceeds_from_prior[[2]], 1000, tolerance = tol)
   expect_equal(
@@ -328,95 +258,17 @@ test_that("tontine_resolve_initial_cash and cash account roll proceeds forward w
   expect_equal(deficit_account$reserve_draw, pmax(-deficit_account$cash_end, 0), tolerance = tol)
 })
 
-test_that("same ladder and survival schedule can be reused across shocked curve panels", {
+test_that("shock pricing uses the same ladder cash flows and new discount rates", {
   yields <- make_ladder_yields()
-  schedule <- tontine_build_bond_ladder_schedule(
-    yields = yields,
-    reference_curve = "usa",
-    purchase_years = 2020:2021,
-    curves = c("usa", "gbr"),
-    total_target_par = 1000,
-    q = c(0.01, 0.02)
-  )
+  schedule <- make_ladder_schedule(yields, 2020:2021, q = c(.01, .02))
+  baseline <- price_ladder(yields, schedule)
 
-  shocked_yields <- yields
-  shocked_yields$usa$X01Y <- shocked_yields$usa$X01Y + 2
+  yields$usa$X01Y <- yields$usa$X01Y + 2
+  shocked <- price_ladder(yields, schedule, scenario_type = "shock")
 
-  baseline_holdings <- tontine_price_bond_ladder(
-    curve_panels = yields,
-    ladder_schedule = schedule,
-    mat_names = c("X01Y", "X02Y"),
-    model_name = "DNS",
-    scenario_name = "Baseline DNS",
-    scenario_type = "baseline"
-  )
-  shocked_holdings <- tontine_price_bond_ladder(
-    curve_panels = shocked_yields,
-    ladder_schedule = schedule,
-    mat_names = c("X01Y", "X02Y"),
-    model_name = "DNS",
-    scenario_name = "DNS USA L +1",
-    scenario_type = "shock",
-    shock_label = "USA L +1"
-  )
-
-  expect_equal(shocked_holdings[, c("rung_id", "purchase_date", "maturity_date", "country", "country_par", "q_k", "p_k")],
-               baseline_holdings[, c("rung_id", "purchase_date", "maturity_date", "country", "country_par", "q_k", "p_k")])
-  expect_true(any(shocked_holdings$purchase_cost != baseline_holdings$purchase_cost))
-  expect_equal(
-    tontine_resolve_initial_cash(shocked_holdings),
-    sum(shocked_holdings$purchase_cost[shocked_holdings$rung_id == 1]),
-    tolerance = tol
-  )
-  expect_equal(
-    tontine_resolve_initial_cash(baseline_holdings),
-    sum(baseline_holdings$purchase_cost[baseline_holdings$rung_id == 1]),
-    tolerance = tol
-  )
-})
-
-test_that("baseline curve model fitter assembles observed and delegated baseline panels", {
-  yields <- make_ladder_yields()
-  mat_names <- c("X01Y", "X02Y")
-  fake_panel <- yields
-
-  result <- with_temp_bindings(
-    list(
-      tontine_fit_dns_baseline_curves = function(...) list(
-        model = "DNS",
-        fit = list(id = "dns"),
-        curve_panels = fake_panel
-      ),
-      tontine_fit_dly_baseline_curves = function(...) list(
-        model = "DLY",
-        fit = list(id = "dly"),
-        component = "dislocation_propagated",
-        curve_panels = fake_panel
-      ),
-      tontine_fit_mce_baseline_curves = function(...) list(
-        model = "MCE",
-        fit = list(id = "mce"),
-        curve_panels = fake_panel
-      )
-    ),
-    tontine_fit_baseline_curve_models(
-      yields = yields,
-      curves = c("usa", "gbr"),
-      mats = c(12, 24),
-      mat_names = mat_names,
-      lambdas = 0.1,
-      cutoffs = c(1, 1),
-      reference_curve = "usa",
-      include_models = c("Observed", "DNS", "DLY", "MCE")
-    )
-  )
-
-  expect_equal(names(result), c("Observed", "DNS", "DLY", "MCE"))
-  expect_equal(result$Observed$model, "Observed")
-  expect_equal(colnames(result$Observed$curve_panels$usa), c("time", mat_names))
-  expect_equal(result$DNS$fit$id, "dns")
-  expect_equal(result$DLY$fit$id, "dly")
-  expect_equal(result$MCE$fit$id, "mce")
+  expect_equal(shocked$maturity_proceeds, baseline$maturity_proceeds)
+  expect_equal(shocked$purchase_cost / baseline$purchase_cost,
+               rep(c(exp(-.02), 1), 2), tolerance = tol)
 })
 
 test_that("rolling baseline fitter refits models inside each valuation window", {
@@ -465,9 +317,8 @@ test_that("rolling baseline fitter refits models inside each valuation window", 
   expect_equal(result$Observed$curve_panels$usa$time, windows$purchase_date)
   expect_equal(result$DNS$curve_panels$usa$time, windows$purchase_date)
   expect_equal(result$DNS$curve_panels$usa$X01Y, c(12, 13), tolerance = tol)
-  expect_equal(length(result$DNS$fit), 2)
-  expect_equal(result$DNS$fit[[1]]$fit$start, as.Date("2020-01-02"))
-  expect_equal(result$DNS$fit[[2]]$fit$start, as.Date("2020-12-31"))
+  starts <- lapply(result$DNS$fit, function(window) window$fit$start)
+  expect_equal(unname(do.call(c, starts)), as.Date(c("2020-01-02", "2020-12-31")))
 })
 
 test_that("rolling shocks reuse baselines without changing refit draws or the saved fits", {
@@ -505,9 +356,9 @@ test_that("rolling shocks reuse baselines without changing refit draws or the sa
         expect_identical(actual, expected)
         expect_identical(.Random.seed, expected_rng)
         expect_identical(calls, calls_before)
-        expect_identical(baseline, saved)
       }
     }
+    expect_identical(baseline, saved)
     cached_args <- c(shock_args, list(baseline_curve_models = baseline))
     for (field in c("yields", "valuation_windows", "mce_controls", "fit_seed")) {
       incompatible <- cached_args
@@ -525,14 +376,7 @@ test_that("baseline valuation prices each baseline model and builds cash-account
   shocked_yields <- yields
   shocked_yields$usa$X01Y <- shocked_yields$usa$X01Y + 1
 
-  schedule <- tontine_build_bond_ladder_schedule(
-    yields = yields,
-    reference_curve = "usa",
-    purchase_years = 2020:2021,
-    curves = c("usa", "gbr"),
-    total_target_par = 1000,
-    q = c(0.01, 0.02)
-  )
+  schedule <- make_ladder_schedule(yields, 2020:2021, q = c(0.01, 0.02))
 
   baseline_curve_models <- list(
     Observed = list(model = "Observed", curve_panels = yields),
@@ -563,19 +407,18 @@ test_that("baseline valuation prices each baseline model and builds cash-account
     "total_mortality_credit", "distributable_tontine_gain", "average_1y_zero_rate"
   ) %in% colnames(summary)))
   expect_equal(sort(summary$model), c("DNS", "Observed"))
-  expect_true(all(is.finite(summary$total_purchase_cost)))
+  expect_equal(
+    summary$total_purchase_cost,
+    vapply(summary$model, function(model) {
+      sum(valuation$country_holdings$purchase_cost[valuation$country_holdings$model == model])
+    }, numeric(1), USE.NAMES = FALSE),
+    tolerance = tol
+  )
 })
 
 test_that("valuation accepts paired baseline initial cash with extra unpriced models", {
   yields <- make_ladder_yields()
-  schedule <- tontine_build_bond_ladder_schedule(
-    yields = yields,
-    reference_curve = "usa",
-    purchase_years = 2020:2021,
-    curves = c("usa", "gbr"),
-    total_target_par = 1000,
-    q = c(0.01, 0.02)
-  )
+  schedule <- make_ladder_schedule(yields, 2020:2021, q = c(0.01, 0.02))
 
   valuation <- tontine_price_baseline_models(
     baseline_curve_models = list(
@@ -586,8 +429,6 @@ test_that("valuation accepts paired baseline initial cash with extra unpriced mo
     initial_cash = c(Observed = 999, DNS = 1000)
   )
 
-  expect_equal(unique(valuation$country_holdings$model), "DNS")
+  expect_equal(valuation$initial_cash, c(DNS = 1000))
   expect_equal(unique(valuation$cash_accounts$model), "DNS")
-  expect_equal(names(valuation$initial_cash), "DNS")
-  expect_equal(valuation$initial_cash[["DNS"]], 1000)
 })

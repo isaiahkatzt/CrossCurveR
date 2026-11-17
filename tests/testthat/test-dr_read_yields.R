@@ -1,5 +1,5 @@
 test_that("CSV input preserves downstream names and reconstructs through each method", {
-  panel <- make_ns_curve_df(time = as.Date("2020-01-01") + 0:2, mats = c(1, 6, 12))
+  panel <- make_ns_curve_df(time = as.Date("2020-01-01") + 0:2, mats = c(1, 6, 12, 24))
   file <- tempfile(fileext = ".csv")
   withr::defer(unlink(file))
   utils::write.csv(panel, file, row.names = FALSE)
@@ -9,12 +9,10 @@ test_that("CSV input preserves downstream names and reconstructs through each me
   expect_identical(prefixed, utils::read.csv(file, stringsAsFactors = FALSE))
 
   for (method in c("spline", "log", "parametric")) {
-    rebuilt <- dr_build_curve(prefixed, c(1, 3, 6, 12), build = method)
-    expect_equal(rebuilt, dr_build_curve(canonical, c(1, 3, 6, 12), build = method),
-                 tolerance = 1e-12)
-    expect_true(all(is.finite(as.matrix(rebuilt[, -1]))))
-    expect_equal(as.matrix(rebuilt[, c("01M", "06M", "01Y")]),
-                 round(as.matrix(canonical[, -1]), 4))
+    rebuilt <- dr_build_curve(prefixed, nmats = 3, build = method)
+    expect_equal(rebuilt, dr_build_curve(canonical, nmats = 3, build = method))
+    expect_named(rebuilt, c("time", "01M", "03M", "06M", "01Y", "02Y"))
+    expect_equal(as.matrix(rebuilt[names(canonical)[-1]]), round(as.matrix(canonical[-1]), 4))
   }
 })
 
